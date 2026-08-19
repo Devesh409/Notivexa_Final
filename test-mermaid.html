@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <div id="container"></div>
+  <script>
+    mermaid.initialize({ startOnLoad: false, suppressErrorRendering: false });
+    mermaid.render('mermaid-1234', 'invalid').catch(() => {
+      console.log(document.body.innerHTML);
+    });
+  </script>
+</body>
+</html>

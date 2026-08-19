@@ -1,0 +1,6 @@
+{
+  "name": "Notivexa AI Portal",
+  "description": "Educational platform for Students and Teachers with OCR, summaries, handwritten PDF notes, and PPT generation.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

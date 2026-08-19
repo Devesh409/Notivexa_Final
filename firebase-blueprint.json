@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User's email address"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp when the user was created"
+        }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "Document": {
+      "title": "Document",
+      "description": "A generated study document, summary, assessment, or flashcard set",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "fileUri": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "resultText": {
+          "type": "string"
+        },
+        "slides": {
+          "type": "array"
+        },
+        "flashcards": {
+          "type": "array"
+        },
+        "focusArea": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["title", "type", "createdAt"]
+    },
+    "Book": {
+      "title": "Book",
+      "description": "A user-uploaded or user-added library book",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "desc": { "type": "string" },
+        "department": { "type": "string" },
+        "link": { "type": "string" },
+        "fileContent": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "author", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles"
+    },
+    "users/{userId}/documents/{documentId}": {
+      "schema": { "$ref": "#/entities/Document" },
+      "description": "User's saved document summaries, assessments, and study materials"
+    },
+    "users/{userId}/books/{bookId}": {
+      "schema": { "$ref": "#/entities/Book" },
+      "description": "User's custom uploaded or linked books in the E-Library"
+    }
+  }
+}
