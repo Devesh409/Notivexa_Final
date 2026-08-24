@@ -1,8 +1,9 @@
 import { Slide } from "./types";
 import { SlidePreviewModal } from "./components/SlidePreviewModal";
+import { UniversityPaperEditor } from "./components/UniversityPaperEditor";
 import React, { useState, useRef, useEffect } from "react";
 import { motion } from "motion/react";
-import { BookOpen, GraduationCap, Upload, FileText, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 } from "lucide-react";
+import { BookOpen, GraduationCap, Upload, FileText, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -98,442 +99,21 @@ interface HistoryItem {
   createdAt: any;
 }
 
-function splitMergedMermaidLine(line: string): string[] {
-  if (!line.trim()) return [];
-
-  const parts: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  let quoteChar = "";
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    // Handle quotes to avoid splitting inside string literals
-    if ((char === '"' || char === "'") && (i === 0 || line[i - 1] !== '\\')) {
-      if (inQuotes) {
-        if (char === quoteChar) {
-          inQuotes = false;
-          quoteChar = "";
-        }
-
-      }
- else {
-        inQuotes = true;
-        quoteChar = char;
-      }
-
-    }
-
-
-    current += char;
-
-    if (!inQuotes) {
-      const remaining = line.slice(i + 1);
-      const isBoundary = char === '"' || char === "'" || char === ')' || char === ']' || char === '}';
-
-      // Check for arrows in the middle of the line (using single space separator or no space if right after boundary)
-      const arrowPattern = isBoundary 
-        ? /^(\s*)([A-Za-z0-9_\-]+)\s*(->|-->|->>|-->>|=>|==>)/i
-        : /^(\s+)([A-Za-z0-9_\-]+)\s*(->|-->|->>|-->>|=>|==>)/i;
-
-      // Check for keywords in the middle of the line (using single space separator or no space if right after boundary)
-      const keywordPattern = isBoundary
-        ? /^(\s*)(Note|participant|rect|loop|alt|opt|end|subgraph|classDef|click|style|linkStyle)\b/i
-        : /^(\s+)(Note|participant|rect|loop|alt|opt|end|subgraph|classDef|click|style|linkStyle)\b/i;
-
-      const arrowMatch = remaining.match(arrowPattern);
-      const keywordMatch = remaining.match(keywordPattern);
-
-      if (arrowMatch) {
-        parts.push(current.trim());
-        current = "";
-        // Advance i to skip the spaces before the matched content
-        i += arrowMatch[1].length;
-      }
- else if (keywordMatch) {
-        parts.push(current.trim());
-        // Set current to the keyword, and advance i past both the spaces and the matched keyword
-        current = keywordMatch[2];
-        i += keywordMatch[1].length + keywordMatch[2].length;
-      }
-
-    }
-
-  }
-
-
-  if (current.trim()) {
-    parts.push(current.trim());
-  }
-
-
-  return parts;
-}
-
-function sanitizeNodeSegment(segment: string): string {
-  let trimmed = segment.trim();
-  if (!trimmed) return "";
-
-  // Check if segment is a bracketed node declaration like A["Label"] or A[Label] or A("Label")
-  const bracketMatch = trimmed.match(/^([A-Za-z0-9_\-]+)\s*(\(\[\"|\(\(\"|\[\[\"|\[\(\"|\{\{\"|\[\"|\(\"|\{\"|\>\"|\(\[|\(\(|\[\[|\[\(|\{\{|\[|\(|\{|\>)(.*?)([\"'\s]*[\)\]\}]+)$/);
-  if (bracketMatch) {
-    const nodeId = bracketMatch[1];
-    const openBracket = bracketMatch[2];
-    let content = bracketMatch[3].trim();
-
-    // Clean inner content
-    if ((content.startsWith('"') && content.endsWith('"')) || (content.startsWith("'") && content.endsWith("'"))) {
-      content = content.slice(1, -1).trim();
-    }
-
-    content = content.replace(/"/g, "'").replace(/\\/g, "").replace(/\|\|/g, " or ").replace(/\|/g, "/");
-
-    let openChar = "[";
-    let closeChar = "]";
-    if (openBracket.includes('(') && openBracket.includes('[')) { openChar = "( ["; closeChar = "] )"; }
-    else if (openBracket.includes('(') && openBracket.length > 1) { openChar = "( ("; closeChar = ") )"; }
-    else if (openBracket.includes('[')) {
-      if (openBracket.includes('(')) { openChar = "[ ("; closeChar = ") ]"; }
-      else if (openBracket.length > 1) { openChar = "[ ["; closeChar = "] ]"; }
-      else { openChar = "["; closeChar = "]"; }
-    }
- else if (openBracket.includes('{')) {
-      if (openBracket.length > 1) { openChar = "{ {"; closeChar = "} }"; }
-      else { openChar = "{"; closeChar = "}"; }
-    }
- else if (openBracket.includes('(')) { openChar = "("; closeChar = ")"; }
-    else if (openBracket.includes('>')) { openChar = ">"; closeChar = "]"; }
-
-    const cleanOpen = openChar.replace(/\s+/g, "");
-    const cleanClose = closeChar.replace(/\s+/g, "");
-    return `${nodeId}${cleanOpen}"${content}"${cleanClose}`;
-  }
-
-
-  // Check if segment is unbracketed Node ID + label text (e.g. "B Examination: Assessment" or "B Examination:")
-  const unbracketedMatch = trimmed.match(/^([A-Za-z0-9_\-]+)\s+(.+)$/);
-  if (unbracketedMatch) {
-    const nodeId = unbracketedMatch[1];
-    let label = unbracketedMatch[2].trim();
-
-    // Preserve Mermaid keywords and header statements like "graph TD", "flowchart LR"
-    if (/^(graph|flowchart|subgraph|style|classDef|click|linkStyle|end|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|gitGraph|journey|quadrantChart|xychart|requirement|C4|mindmap|timeline|block|packet|architecture|kanban|sankey)$/i.test(nodeId)) {
-      return `${nodeId} ${label}`;
-    }
-
-
-    // If label is quoted, unwrap it
-    if ((label.startsWith('"') && label.endsWith('"')) || (label.startsWith("'") && label.endsWith("'"))) {
-      label = label.slice(1, -1).trim();
-    }
-
-    label = label.replace(/"/g, "'").replace(/\\/g, "").replace(/\|\|/g, " or ").replace(/\|/g, "/");
-
-    if (label) {
-      return `${nodeId}["${label}"]`;
-    }
-
-    return nodeId;
-  }
-
-
-  // Otherwise it's a bare node ID like "A" or "Node_1" or quoted `"Node_1"`
-  return trimmed.replace(/["']/g, "");
-}
-
-function sanitizeFlowchartLine(line: string): string {
-  const trimmed = line.trim();
-  if (!trimmed) return "";
-
-  if (/^(graph|flowchart|subgraph|style|classDef|click|linkStyle|end)\b/i.test(trimmed) && !/(-->|---|==>|->)/.test(trimmed)) {
-    return trimmed;
-  }
-
-
-  // Split by arrow operators
-  const arrowRegex = /(-->|---|==>|-\.-\>|->>|-->>|->)/g;
-  const segments: string[] = [];
-  const operators: string[] = [];
-
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = arrowRegex.exec(trimmed)) !== null) {
-    const segment = trimmed.slice(lastIndex, match.index);
-    segments.push(segment);
-    operators.push(match[0]);
-    lastIndex = match.index + match[0].length;
-  }
-
-  segments.push(trimmed.slice(lastIndex));
-
-  // Sanitize each node segment
-  const sanitizedSegments = segments.map(s => sanitizeNodeSegment(s));
-
-  // Rebuild the line with arrow operators
-  let result = "";
-  for (let i = 0; i < sanitizedSegments.length; i++) {
-    result += sanitizedSegments[i];
-    if (i < operators.length) {
-      result += ` ${operators[i]} `;
-    }
-
-  }
-
-
-  return result.trim();
-}
-
-function splitSequenceDiagramLine(line: string): string[] {
-  let trimmed = line.trim();
-  if (!trimmed) return [];
-
-  const statements: { index: number; text: string }[] = [];
-
-  const arrowRegex = /([A-Za-z0-9_\-]+)\s*(->>|-->>|->|-->|=>|==>|x->|x-->|->\+|->-|->>\+|->>-)\s*([A-Za-z0-9_\-]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = arrowRegex.exec(trimmed)) !== null) {
-    statements.push({ index: m.index, text: m[0] });
-  }
-
-
-  const kwRegex = /\b(participant|actor|box|loop|alt|opt|par|rect|critical|break|Note\s+(?:left of|right of|over)?|activate|deactivate|end|else|option|autonumber|title)\b/gi;
-  while ((m = kwRegex.exec(trimmed)) !== null) {
-    statements.push({ index: m.index, text: m[0] });
-  }
-
-
-  if (statements.length <= 1) {
-    if ((trimmed.includes("->>") || trimmed.includes("-->>") || trimmed.includes("->") || trimmed.includes("-->")) && !trimmed.includes(":")) {
-      trimmed = trimmed.replace(/^([A-Za-z0-9_\-]+\s*(?:->>|-->>|->|-->)\s*[A-Za-z0-9_\-]+)\s+(.+)$/, '$1: $2');
-    }
-
-    return [trimmed];
-  }
-
-
-  statements.sort((a, b) => a.index - b.index);
-
-  const filtered: { index: number; text: string }[] = [];
-  for (const st of statements) {
-    if (filtered.length === 0 || st.index > filtered[filtered.length - 1].index) {
-      filtered.push(st);
-    }
-
-  }
-
-
-  const results: string[] = [];
-  for (let i = 0; i < filtered.length; i++) {
-    const startPos = filtered[i].index;
-    const endPos = (i + 1 < filtered.length) ? filtered[i + 1].index : trimmed.length;
-    let piece = trimmed.slice(startPos, endPos).trim();
-    
-    if ((piece.includes("->>") || piece.includes("-->>") || piece.includes("->") || piece.includes("-->")) && !piece.includes(":")) {
-      piece = piece.replace(/^([A-Za-z0-9_\-]+\s*(?:->>|-->>|->|-->)\s*[A-Za-z0-9_\-]+)\s+(.+)$/, '$1: $2');
-    }
-
-
-    if (piece) {
-      results.push(piece);
-    }
-
-  }
-
-
-  return results.length > 0 ? results : [trimmed];
-}
-
-function cleanMermaidChart(chartCode: string): string {
-  if (!chartCode) return "";
-
-  let code = chartCode.replace(/\\n/g, "\n").trim();
-  code = code.replace(/^```mermaid\s*/i, "").replace(/```\s*$/, "").trim();
-
-  // Separate header (graph TD / flowchart LR) if directly followed by nodes or arrows on the same line
-  code = code.replace(/^(graph\s+[A-Za-z0-9]+|flowchart\s+[A-Za-z0-9]+)\s*(.+)$/i, (match, header, rest) => {
-    const trimmedRest = rest.trim();
-    if (trimmedRest) {
-      return `${header}\n${trimmedRest}`;
-    }
-
-    return header;
-  });
-
-  // 1. Remove quotes placed around node IDs before brackets:
-  code = code.replace(/"([A-Za-z0-9_\-]+)"\s*([\[\(\{]+)/g, '$1$2');
-  code = code.replace(/'([A-Za-z0-9_\-]+)'\s*([\[\(\{]+)/g, '$1$2');
-
-  // 2. Remove quotes wrapping an entire node expression:
-  code = code.replace(/"([A-Za-z0-9_\-]+)\s*([\[\(\{]+)(.*?)([\]\)\}]+)"/g, (_, id, openB, content, closeB) => {
-    let cleanContent = content.trim();
-    if ((cleanContent.startsWith("'") && cleanContent.endsWith("'")) || (cleanContent.startsWith('"') && cleanContent.endsWith('"'))) {
-      cleanContent = cleanContent.slice(1, -1);
-    }
-
-    cleanContent = cleanContent.replace(/"/g, "'");
-    return `${id}${openB}"${cleanContent}"${closeB}`;
-  });
-
-  // 3. Fix single quotes inside node labels:
-  code = code.replace(/\b([A-Za-z0-9_\-]+)\s*([\[\(\{]+)\s*'([^'\n]+)'\s*([\]\)\}]+)/g, '$1$2"$3"$4');
-
-  // 4. Fix HTML break tags
-  code = code.replace(/<br\s*\/?>/gi, " ");
-
-  // 5. Fix quotes around arrow targets: e.g. --> "NodeID" -> --> NodeID
-  code = code.replace(/(-->|---|==>|-\.-\>|->>|-->>|->)\s*"([A-Za-z0-9_\-]+)"(?!\s*[\[\(\{])/g, '$1 $2');
-
-  return code;
-}
-
 function preprocessMermaid(chartCode: string): string {
   if (!chartCode) return "";
-
-  let normalized = cleanMermaidChart(chartCode);
-
-  const isSequence = /^\s*sequenceDiagram\b/i.test(normalized);
-  const isFlowchart = /^\s*(flowchart|graph)\b/i.test(normalized) || !isSequence;
-
-  const rawLines = normalized.split(/\r?\n/);
-  const lines: string[] = [];
-
-  // Pre-pass: separate header if merged with line 1 content
-  for (const rawLine of rawLines) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-
-    const headerMatch = trimmed.match(/^(graph\s+[A-Za-z0-9]+|flowchart\s+[A-Za-z0-9]+)\s*(.+)$/i);
-    if (headerMatch) {
-      lines.push(headerMatch[1].trim());
-      if (headerMatch[2].trim()) {
-        lines.push(headerMatch[2].trim());
-      }
-
-    }
- else {
-      lines.push(trimmed);
-    }
-
-  }
-
-
-  const processedLines: string[] = [];
-  let lastNodeId: string | null = null;
-  let insideLegend = false;
-
-  for (let line of lines) {
-    let trimmed = line.trim();
-    if (!trimmed) continue;
-
-    trimmed = trimmed.replace(/([A-Za-z0-9])'([A-Za-z0-9])/g, '$1’$2');
-
-    if (isSequence) {
-      const seqLines = splitSequenceDiagramLine(trimmed);
-      for (const seqLine of seqLines) {
-        if (seqLine.trim()) processedLines.push(seqLine.trim());
-      }
-
-      continue;
-    }
-
-
-    const splitLines = splitMergedMermaidLine(trimmed);
-    for (let splitLine of splitLines) {
-      let part = splitLine.trim();
-      if (!part) continue;
-
-      if (/^subgraph\s+(.*legend.*|.*key.*)/i.test(part)) {
-        insideLegend = true;
-        continue;
-      }
-
-      if (insideLegend && /^end/i.test(part)) {
-        insideLegend = false;
-        continue;
-      }
-
-      if (insideLegend) continue;
-      
-      // Also skip standalone nodes that are just a legend box
-      if (/^(legend|key)[0-9]*\s*\[/i.test(part) || part.toLowerCase().includes('["legend"]')) {
-        continue;
-      }
-
-
-      if (isFlowchart) {
-        // Is it purely a header line like "graph TD" or "subgraph Title" or "end"?
-        if (/^(graph|flowchart|subgraph|style|classDef|click|linkStyle|end)\b/i.test(part) && !/(-->|---|==>|->)/.test(part)) {
-          processedLines.push(part);
-          continue;
-        }
-
-
-        // Handle orphan leading arrows like "--> B["Label"]" or "--> B"
-        const leadingArrowMatch = part.match(/^(-->|---|==>|-\.-\>|->>|-->>|->)\s*(.*)$/);
-        if (leadingArrowMatch) {
-          const arrowOp = leadingArrowMatch[1];
-          const rest = leadingArrowMatch[2].trim();
-          if (lastNodeId) {
-            part = `${lastNodeId} ${arrowOp} ${rest}`;
-          }
- else {
-            // No previous node ID, strip the leading arrow
-            part = rest;
-          }
-
-        }
-
-
-        // Sanitize node labels and ensure valid syntax
-        part = sanitizeFlowchartLine(part);
-
-        // Track last node ID from this line for subsequent orphan arrows
-        const allNodeIds = Array.from(part.matchAll(/\b([A-Za-z0-9_\-]+)\s*(?:[\[\(\{]|$)/g)).map(m => m[1]);
-        if (allNodeIds.length > 0) {
-          lastNodeId = allNodeIds[allNodeIds.length - 1];
-        }
-
-      }
-
-
-      if (part.trim()) {
-        processedLines.push(part.trim());
-      }
-
-    }
-
-  }
-
-
-  return processedLines.join('\n');
-}
-
-function extractNodes(chart: string): { id: string; label: string }[] {
-  const extracted: { id: string; label: string }[] = [];
-  const matches = Array.from(chart.matchAll(/([A-Za-z0-9_\-]+)\s*(?:[\[\(\{]+(.*?)[\]\)\}]+|(?:\s+([A-Za-z0-9_\-:\.,\s]+)))/g));
-  for (const m of matches) {
-    const id = m[1];
-    const label = (m[2] || m[3] || id).replace(/["']/g, "").trim();
-    if (label && !["graph", "flowchart", "TD", "LR", "TB", "BT", "RL"].includes(id) && !extracted.some(n => n.label === label)) {
-      extracted.push({ id, label });
-    }
-
-  }
-
-  return extracted;
+  let code = chartCode.replace(/\\n/g, "\n").trim();
+  code = code.replace(/^```mermaid\s*/i, "").replace(/```\s*$/, "").trim();
+  code = code.replace(/(-->|---|==>|-\-\>|->>|-->>|->)\s*"([A-Za-z0-9_\-]+)"(?!\s*[\[\(\{])/g, '$1 $2');
+  return code;
 }
 
 function MermaidChart({ chart, handwritingFont, mode, penColor, isDarkMode }: { chart: string; handwritingFont?: string; mode?: string; penColor?: string; isDarkMode?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hasError, setHasError] = useState(false);
-  const [parsedNodes, setParsedNodes] = useState<{ id: string; label: string }[]>([]);
   const preprocessedChart = preprocessMermaid(chart);
 
   useEffect(() => {
     setHasError(false);
-    setParsedNodes(extractNodes(chart));
     
     const font = (mode === 'student') ? (
       handwritingFont === 'font-handwriting' ? 'Caveat, cursive' :
@@ -613,22 +193,9 @@ function MermaidChart({ chart, handwritingFont, mode, penColor, isDarkMode }: { 
         }).catch(fallbackErr => {
           console.warn("Level 1 fallback failed, trying level-2 rebuild...", fallbackErr);
           
-          // Level 2: Rebuild simplified graph TD with plain text labels
-          const rawLines = preprocessedChart.split('\n');
-          const rebuiltLines: string[] = ["graph TD"];
-          for (const l of rawLines) {
-            const trimmedL = l.trim();
-            if (!trimmedL || /^(graph|flowchart)\b/i.test(trimmedL)) continue;
-
-            const cleanLine = sanitizeFlowchartLine(trimmedL);
-            if (cleanLine) {
-              rebuiltLines.push(cleanLine);
-            }
-
-          }
-
-          const level2Chart = rebuiltLines.join('\n');
-          const level2Id = `mermaid-${Math.random().toString(36).substring(7)}`;
+          // Level 2 skipped because we removed aggressive sanitizers.
+          setHasError(true);
+          const level2Id = `mermaid-${Math.random().toString(36).substring(7)}`; // Dummy
 
           mermaid.render(level2Id, level2Chart).then(({ svg }) => {
             if (svg.includes("Syntax error")) throw new Error("Mermaid syntax error SVG");
@@ -720,12 +287,12 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [fileData, setFileData] = useState<{fileUri: string, mimeType: string} | null>(null);
   const [loading, setLoading] = useState(false);
-  const [generatingType, setGeneratingType] = useState<"notes" | "assessment" | "flashcards" | "question-bank" | "lesson-plan" | "video" | "ppt" | "">("");
+  const [generatingType, setGeneratingType] = useState<"notes" | "assessment" | "flashcards" | "question-bank" | "lesson-plan" | "video" | "ppt" | "exam-paper" | "">("");
   const [resultText, setResultText] = useState("");
   const [slides, setSlides] = useState<Slide[]>([]);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [pptTheme, setPptTheme] = useState<"academic" | "professional" | "minimalist">("academic");
-  const [resultType, setResultType] = useState<"notes" | "assessment" | "question-bank" | "lesson-plan" | "video" | "ppt" | "">("");
+  const [pptTheme, setPptTheme] = useState<"academic" | "professional" | "minimalist" | "pastel">("academic");
+  const [resultType, setResultType] = useState<"notes" | "assessment" | "question-bank" | "lesson-plan" | "video" | "ppt" | "exam-paper" | "">("");
   const [videoData, setVideoData] = useState<VideoData | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [flashcards, setFlashcards] = useState<{term: string, definition: string}[]>([]);
@@ -746,7 +313,7 @@ export default function App() {
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [handwritingFont, setHandwritingFont] = useState("font-handwriting");
-  const [flashcardThemeStyle, setFlashcardThemeStyle] = useState<"default" | "monochrome" | "pastel" | "high-contrast">("default");
+  const [flashcardThemeStyle, setFlashcardThemeStyle] = useState<"default" | "monochrome" | "pastel" | "high-contrast">("pastel");
   const [pageStyle, setPageStyle] = useState("ruled");
   const [penColor, setPenColor] = useState("blue");
   const [isExporting, setIsExporting] = useState(false);
@@ -754,7 +321,11 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState(0);
   const [exportStatus, setExportStatus] = useState("");
   const [focusArea, setFocusArea] = useState("Algorithms, step-by-step processes, and diagrams in student style");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isSpeechPaused, setIsSpeechPaused] = useState(false);
     const [questionBankType, setQuestionBankType] = useState("all");
+    const [examPaperType, setExamPaperType] = useState("paper-full");
+    const [universityMarks, setUniversityMarks] = useState<number>(60);
   const [questionBankBloomLevel, setQuestionBankBloomLevel] = useState("all");
 
   const [error, setError] = useState<string | null>(null);
@@ -1103,6 +674,58 @@ export default function App() {
     signOut(auth);
   };
 
+
+
+
+  // Text-to-Speech logic
+  const handlePlayPauseSpeech = () => {
+    if (isSpeaking && !isSpeechPaused) {
+      window.speechSynthesis.pause();
+      setIsSpeechPaused(true);
+    } else if (isSpeaking && isSpeechPaused) {
+      window.speechSynthesis.resume();
+      setIsSpeechPaused(false);
+    } else {
+      if (!resultText) return;
+      // Strip markdown using a simple regex
+      const plainText = resultText
+        .replace(/---PAGE_BREAK---/g, " ")
+        .replace(/---SET_SEPARATOR---/g, " ")
+        .replace(/[*_#`~>]/g, "")
+        .replace(/\[DIAGRAM:.*?\]/g, "Diagram omitted.")
+        .replace(/\[.*?\]\(.*?\)/g, "Link omitted.");
+      
+      const utterance = new SpeechSynthesisUtterance(plainText);
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        setIsSpeechPaused(false);
+      };
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        setIsSpeechPaused(false);
+      };
+      
+      window.speechSynthesis.speak(utterance);
+      setIsSpeaking(true);
+      setIsSpeechPaused(false);
+    }
+  };
+
+  const handleStopSpeech = () => {
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    setIsSpeechPaused(false);
+  };
+  
+  useEffect(() => {
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    setIsSpeechPaused(false);
+    return () => {
+      window.speechSynthesis.cancel();
+    };
+  }, [resultText]);
+
   if (authLoading) {
     return (
       <div className={`flex h-screen items-center justify-center transition-colors ${isDarkMode ? "bg-[#181816]" : "bg-[#F5F5F0]"}`}>
@@ -1113,9 +736,15 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className={`flex h-screen items-center justify-center font-sans transition-colors ${isDarkMode ? "bg-[#181816] text-[#E0E0D5]" : "bg-[#F5F5F0] text-[#2D2D2A]"}`}>
-        <div className={`p-10 rounded-[24px] border text-center max-w-md w-full relative transition-colors ${
-          isDarkMode ? "bg-[#22221F] border-[#383832] shadow-[0_4px_20px_rgba(0,0,0,0.4)]" : "bg-white border-[#E0E0D5] shadow-[0_4px_20px_rgba(90,90,64,0.05)]"
+      <div className={`flex min-h-screen items-center justify-center font-sans transition-colors relative overflow-hidden ${isDarkMode ? "bg-[#131311] text-[#E0E0D5]" : "bg-[#FDFDFB] text-[#2D2D2A]"}`}>
+        
+        {/* Background Ambient Glows */}
+        <div className={`absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full blur-[120px] pointer-events-none ${isDarkMode ? "bg-sky-900/20" : "bg-sky-200/40"}`}></div>
+        <div className={`absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full blur-[120px] pointer-events-none ${isDarkMode ? "bg-indigo-900/20" : "bg-indigo-200/40"}`}></div>
+        <div className={`absolute top-[30%] left-[50%] w-[40%] h-[40%] rounded-full blur-[100px] pointer-events-none ${isDarkMode ? "bg-violet-900/15" : "bg-violet-200/30"}`}></div>
+
+        <div className={`p-10 md:p-12 rounded-[32px] border text-center max-w-md w-full relative z-10 transition-colors backdrop-blur-xl ${
+          isDarkMode ? "bg-[#22221F]/80 border-[#383832] shadow-[0_8px_32px_rgba(0,0,0,0.5)]" : "bg-white/70 border-white/60 shadow-[0_8px_32px_rgba(90,90,64,0.08)]"
         }
 `}>
           <button
@@ -1130,20 +759,32 @@ export default function App() {
           >
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-          <div className={`p-4 rounded-2xl inline-flex items-center justify-center mb-6 transition-colors ${isDarkMode ? "bg-[#2D2D2A] text-[#C2C2B0]" : "bg-[#E8E8E0] text-[#5A5A40]"}`}>
-            <BookOpen size={48} />
+          <div className="w-20 h-20 mx-auto bg-gradient-to-tr from-sky-500 via-indigo-600 to-violet-600 rounded-[24px] shadow-xl shadow-sky-500/25 text-white flex items-center justify-center mb-6 transform hover:scale-105 transition-all">
+            <BookOpen size={36} />
           </div>
-          <h1 className={`text-3xl font-bold font-serif mb-2 ${isDarkMode ? "text-[#F5F5F0]" : "text-[#3A3A2F]"}`}>Notivexa <span className={`italic font-medium ${isDarkMode ? "text-[#C2C2B0]" : "text-[#5A5A40]"}`}>AI</span></h1>
-          <p className="text-[#8A8A7A] mb-8">Sign in to access AI-powered learning tools, generate notes, flashcards, and presentations.</p>
+          <h1 className={`text-3xl font-bold font-serif mb-2 tracking-tight ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
+            Welcome to <br />Notivexa <span className="bg-gradient-to-r from-sky-500 to-violet-600 bg-clip-text text-transparent">AI</span>
+          </h1>
+          <p className={`mb-8 text-sm leading-relaxed ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+            Sign in to access AI-powered learning tools, generate notes, flashcards, and presentations instantly.
+          </p>
           <AuthForm isDarkMode={isDarkMode} />
           
-          <div className="my-6 text-[#8A8A7A] text-sm">Or</div>
+          <div className="flex items-center my-6 opacity-70">
+            <div className={`flex-1 border-t ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}></div>
+            <div className={`px-4 text-xs font-medium uppercase tracking-wider ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>Or continue with</div>
+            <div className={`flex-1 border-t ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}></div>
+          </div>
           
           <button 
             onClick={handleSignIn}
-            className="w-full bg-[#5A5A40] text-white py-3 px-6 rounded-full font-semibold flex items-center justify-center gap-3 hover:bg-opacity-90 transition-colors"
+            className={`w-full py-3.5 px-6 rounded-xl font-semibold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
+              isDarkMode
+                ? "bg-[#2D2D2A] text-white hover:bg-[#383832] border border-slate-700"
+                : "bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 shadow-sm"
+            }`}
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
               <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
               <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
@@ -1747,6 +1388,12 @@ export default function App() {
         fontName = "Helvetica";
         titleColor = "000000";
         contentColor = "000000";
+      } else if (pptTheme === "pastel") {
+        bgColor = "FEF2F2"; // Soft rose
+        accentColor = "FBCFE8"; // Soft pink
+        fontName = "Helvetica";
+        titleColor = "831843"; // Deep pink/rose for contrast
+        contentColor = "9D174D";
       }
 
       const objects: any[] = [];
@@ -1804,6 +1451,76 @@ export default function App() {
       alert("Failed to create PPTX file.");
     }
   };
+  const generateExamPaper = async () => {
+    if (!fileData) return;
+    setLoading(true);
+    setGeneratingType("exam-paper");
+    setError(null);
+    try {
+      // Client-side cache check to prevent double API calls & save quota
+      const cached = history.find(
+        (item) => item.fileUri === fileData.fileUri && item.type === "question-bank" && item.questionBankType === examPaperType && item.questionBankBloomLevel === questionBankBloomLevel);
+      if (cached) {
+        setResultText(cached.resultText || "");
+        setResultType("exam-paper");
+                setFlashcards([]);
+        setLoading(false);
+        setGeneratingType("");
+        return;
+      }
+
+
+      const res = await fetch("/api/generate-question-bank", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileUri: fileData.fileUri, mimeType: fileData.mimeType, questionType: examPaperType, bloomLevel: questionBankBloomLevel, mode: mode, totalMarks: examPaperType === "paper-university" ? universityMarks : undefined }),
+      });
+      const textResponse = await res.text();
+      let data;
+      try {
+        data = JSON.parse(textResponse.trim());
+      }
+ catch (e) {
+        if (textResponse.trim().toLowerCase().startsWith("<!doctype html>")) { throw new Error("Server is temporarily unavailable (restarting). Please try again in a few seconds."); } throw new Error(`Server error: ${textResponse.slice(0, 100)}`);
+      }
+
+      
+      if (data && data.error) throw new Error(data.error);
+      if (!res.ok) throw new Error("Failed to generate question bank");
+      
+      setResultText(data.result || "");
+      setResultType("exam-paper");
+            setFlashcards([]);
+
+      if (user) {
+        await addDoc(collection(db, "users", user.uid, "documents"), {
+          title: file ? file.name : "Question Bank",
+          type: "question-bank",
+          questionBankType: examPaperType,
+          questionBankBloomLevel: questionBankBloomLevel,
+          fileUri: fileData.fileUri,
+          mimeType: fileData.mimeType,
+          resultText: data.result || "",
+
+          flashcards: [],
+          focusArea: focusArea,
+          createdAt: serverTimestamp()
+        });
+      }
+
+    }
+ catch (err: any) {
+      handleFetchError(err);
+    }
+ finally {
+      setLoading(false);
+      setGeneratingType("");
+    }
+
+  };
+
+
+
   const generatePPT = async () => {
     if (!fileData) return;
     setLoading(true);
@@ -1982,7 +1699,6 @@ export default function App() {
     URL.revokeObjectURL(url);
     setShowExportMenu(false);
   };
-
   const downloadHandwrittenPDF = async (fast: boolean = false) => {
     if (!notesRef.current) return;
     
@@ -2515,7 +2231,7 @@ export default function App() {
 
 
   return (
-    <div className={`flex h-screen font-sans transition-colors duration-300 ${isDarkMode ? "bg-[#181816] text-[#E0E0D5] dark" : "bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 text-slate-800"}`}>
+    <div className={`flex h-screen font-sans transition-colors duration-300 ${isDarkMode ? "bg-[#131311] text-[#E0E0D5] dark" : "bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 text-slate-800"}`}>
       
       {/* Sidebar (Streamlit style) */}
       <div className={`w-72 border-r flex flex-col h-full z-10 transition-colors duration-300 ${
@@ -2551,7 +2267,7 @@ export default function App() {
         </div>
 
         {/* Scrollable middle container */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 min-h-0 scrollbar-thin">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 min-h-0 custom-scrollbar">
           
           {/* Late-Night Study Mode Quick Switch */}
           <div className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-2 ${
@@ -3066,35 +2782,81 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       <div className={`flex items-center gap-2 ${isDarkMode ? "text-[#C2C2B0]" : "text-[#5A5A40]"}`}>
                         <GraduationCap size={18} className="text-[#059669]" />
                         <span className={`font-serif text-sm font-bold ${isDarkMode ? "text-[#F5F5F0]" : "text-[#3A3A2F]"}`}>
-                          Question Bank Generator
+                          Exam Paper & Question Bank
                         </span>
                       </div>
                     </div>
                     
-                    <div className="space-y-2">
-                      <label className={`block text-xs font-semibold ${isDarkMode ? "text-[#A1A194]" : "text-[#8A8A7A]"}`}>
-                        Question Type Configuration
-                      </label>
-                      <select 
-                        value={questionBankType} 
-                        onChange={(e) => setQuestionBankType(e.target.value)}
-                        className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-[#059669]/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
-                      >
-                        <option value="all">All Types (50+ each)</option>
-                        <option value="mcq">Multiple Choice (50+ MCQs)</option>
-                        <option value="short">Short Answer (50+ Questions)</option>
-                        <option value="long">Long Answer (50+ Questions)</option>
-                      </select>
-                    </div>
+                                        <div className="space-y-3">
+                      <div className="p-3 rounded-2xl border border-[#D1D1C4] dark:border-[#383832] space-y-3">
+                        <label className={`block text-xs font-semibold ${isDarkMode ? "text-[#A1A194]" : "text-[#8A8A7A]"}`}>
+                          Question Bank Generator
+                        </label>
+                        <select 
+                          value={questionBankType} 
+                          onChange={(e) => setQuestionBankType(e.target.value)}
+                          className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-[#059669]/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
+                        >
+                          <option value="all">All Types (50+ each)</option>
+                          <option value="mcq">Multiple Choice (50+ MCQs)</option>
+                          <option value="short">Short Answer (50+ Questions)</option>
+                          <option value="long">Long Answer (50+ Questions)</option>
+                        </select>
+                        <button
+                          onClick={generateQuestionBank}
+                          disabled={!fileData || loading}
+                          className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-2.5 px-4 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
+                        >
+                          {loading && generatingType === "question-bank" ? <Loader2 size={14} className="animate-spin" /> : <GraduationCap size={14} />}
+                          Generate Question Bank
+                        </button>
+                      </div>
 
-                    <button
-                      onClick={generateQuestionBank}
-                      disabled={!fileData || loading}
-                      className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-3 px-4 rounded-full text-sm font-semibold transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20 hover:shadow-emerald-500/30 hover:scale-[1.01] active:scale-[0.99]"
-                    >
-                      {loading && generatingType === "question-bank" ? <Loader2 size={16} className="animate-spin" /> : <GraduationCap size={16} />}
-                      Generate Question Bank
-                    </button>
+                      <div className="p-3 rounded-2xl border border-[#D1D1C4] dark:border-[#383832] space-y-3 bg-gradient-to-br from-blue-50/30 to-indigo-50/30 dark:from-blue-900/10 dark:to-indigo-900/10">
+                        <label className={`block text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400`}>
+                          Exam Question Paper
+                        </label>
+                        <select 
+                          value={examPaperType} 
+                          onChange={(e) => setExamPaperType(e.target.value)}
+                          className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-blue-600/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
+                        >
+                          <option value="paper-full">Full Paper (MCQs, Short 2/3/4m, Long 5/8/10m)</option>
+                          <option value="paper-mcq">MCQ Paper (1 Mark each)</option>
+                          <option value="paper-short">Short Q's Paper (2, 3, 4 Marks)</option>
+                          <option value="paper-long">Long Q's Paper (5, 8, 10 Marks)</option>
+                          <option value="paper-university">University Format (CO/BT Mapped)</option>
+                        </select>
+                        {examPaperType === "paper-university" && (
+                          <div className="mt-2">
+                            <label className={`block text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400 mb-1`}>
+                              Total Marks
+                            </label>
+                            <select
+                              value={universityMarks}
+                              onChange={(e) => setUniversityMarks(Number(e.target.value))}
+                              className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-blue-600/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
+                            >
+                              <option value={10}>10 Marks</option>
+                              <option value={20}>20 Marks</option>
+                              <option value={50}>50 Marks</option>
+                              <option value={60}>60 Marks</option>
+                              <option value={75}>75 Marks</option>
+                              <option value={80}>80 Marks</option>
+                              <option value={100}>100 Marks</option>
+                            </select>
+                          </div>
+                        )}
+                        <button
+                          onClick={generateExamPaper}
+                          disabled={!fileData || loading}
+                          className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-2.5 px-4 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
+                        >
+                          {loading && generatingType === "exam-paper" ? <Loader2 size={14} className="animate-spin" /> : <FileQuestion size={14} />}
+                          Generate Exam Paper
+                        </button>
+                      </div>
+                    </div>
                   </div>
                   <button
                     onClick={generatePPT}
@@ -3159,7 +2921,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
         <div className="absolute top-4 right-4 z-20">
           <UserProfile user={user} isDarkMode={isDarkMode} />
         </div>
-        <div className="mb-8">
+        <div className="mb-8 relative z-10">
           <Chatbot fileUri={fileData?.fileUri} mimeType={fileData?.mimeType} isDarkMode={isDarkMode} embedded={false} />
         </div>
         <div className="max-w-4xl mx-auto space-y-8">
@@ -3204,7 +2966,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
             </motion.div>)}
 
           {!resultText && !flashcards.length && !videoData && (
-            <div className="h-full min-h-[70vh] flex flex-col items-center justify-center text-center relative overflow-hidden py-20 px-6 rounded-3xl shadow-sm my-2 bg-gradient-to-br from-indigo-50/60 via-white to-sky-50/60 border border-indigo-100/50">
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center overflow-hidden bg-gradient-to-br from-indigo-50/60 via-white to-sky-50/60 z-0">
               {/* Scattered Vector Open Book Illustrations & Academic Symbols matching reference design */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden select-none -z-10">
                 {/* Top Left Book */}
@@ -3292,6 +3054,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                     <option value="academic">Academic Theme</option>
                     <option value="professional">Professional Theme</option>
                     <option value="minimalist">Minimalist Theme</option>
+                    <option value="pastel">Soft Pastel</option>
                   </select>
                   <button 
                     onClick={() => setShowPreviewModal(true)}
@@ -3347,7 +3110,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                 <h3 className="font-serif text-2xl text-[#3A3A2F]">
                   {resultType === "lesson-plan" ? "Study Lesson Planner" : resultType === "question-bank" ? "Study Question Bank" : resultType === "assessment" ? "Assessment Paper" : "Chapter-wise Summary"}
                 </h3>
-                {resultType !== "lesson-plan" && (
+                {true && (
                   <div className="flex flex-wrap items-center gap-2">
 { (
                       <>
@@ -3380,6 +3143,27 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                           <option value="font-handwriting-patrick">Patrick</option>
                         </select>
                       </>)}
+                    <div className="flex items-center gap-2">
+                      {resultText && (
+                        <div className="flex items-center gap-1 bg-white/50 border border-[#D1D1C4] rounded-full p-1 shadow-sm mr-2">
+                          <button
+                            onClick={handlePlayPauseSpeech}
+                            className={`p-1.5 rounded-full transition-colors ${isSpeaking && !isSpeechPaused ? 'bg-[#5A5A40] text-white' : 'text-[#5A5A40] hover:bg-[#F0F0E8]'}`}
+                            title={isSpeaking && !isSpeechPaused ? "Pause Audio" : "Play Audio"}
+                          >
+                            {isSpeaking && !isSpeechPaused ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill={isSpeaking && isSpeechPaused ? "currentColor" : "none"} />}
+                          </button>
+                          {(isSpeaking || isSpeechPaused) && (
+                            <button
+                              onClick={handleStopSpeech}
+                              className="p-1.5 rounded-full transition-colors text-red-500 hover:bg-red-50"
+                              title="Stop Audio"
+                            >
+                              <Square size={14} fill="currentColor" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     <div className="relative">
                       <button
                         onClick={() => setShowExportMenu(!showExportMenu)}
@@ -3406,117 +3190,38 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                           </button>
                         </div>)}
                     </div>
+                    </div>
                   </div>)}
 
               </div>
               
               <div className="p-8">
-                {resultType === "lesson-plan" && lessonPlan && (
-                  <div className="mb-8 bg-[#FAF9F6] border border-[#E0E0D5] rounded-2xl p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                      <div className="bg-white border border-[#E0E0D5] rounded-xl p-4 flex items-center gap-4 shadow-sm">
-                        <div className="p-3 bg-[#FEF3C7] text-[#D97706] rounded-xl">
-                          <Clock size={20} />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-[#8A8A7A] uppercase tracking-wider">Completion Duration</p>
-                          <p className="text-sm font-semibold text-[#3A3A2F] mt-0.5">{lessonPlan.duration || "N/A"}</p>
-                        </div>
-                      </div>
-                      <div className="bg-white border border-[#E0E0D5] rounded-xl p-4 flex items-center gap-4 shadow-sm">
-                        <div className="p-3 bg-[#E0F2FE] text-[#0369A1] rounded-xl">
-                          <BookOpen size={20} />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-[#8A8A7A] uppercase tracking-wider">Total Lessons/Sessions</p>
-                          <p className="text-sm font-semibold text-[#3A3A2F] mt-0.5">{lessonPlan.totalSessions || `${lessonPlan.sessions?.length || 0} Sessions`}</p>
-                        </div>
-                      </div>
-                      <div className="bg-white border border-[#E0E0D5] rounded-xl p-4 flex flex-col justify-center shadow-sm">
-                        <div className="flex justify-between items-center mb-1">
-                          <p className="text-[10px] font-bold text-[#8A8A7A] uppercase tracking-wider">Syllabus Progress</p>
-                          <span className="text-xs font-bold text-[#5A5A40]">
-                            {Math.round((Object.values(completedSessions).filter(Boolean).length / (lessonPlan.sessions?.length || 1)) * 100)}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-[#E0E0D5] h-2 rounded-full overflow-hidden">
-                          <div 
-                            className="bg-[#5A5A40] h-full transition-all duration-300"
-                            style={{ width: `${(Object.values(completedSessions).filter(Boolean).length / (lessonPlan.sessions?.length || 1)) * 100}%` }}
-                          ></div>
-                        </div>
-                        <p className="text-[10px] text-[#8A8A7A] mt-1.5 text-right font-medium">
-                          {Object.values(completedSessions).filter(Boolean).length} of {lessonPlan.sessions?.length || 0} completed
-                        </p>
-                      </div>
-                    </div>
-
-                    <h4 className="font-serif text-lg text-[#3A3A2F] mb-4 flex items-center gap-2">
-                      <Calendar size={18} className="text-[#5A5A40]" /> Interactive Lesson Timeline
-                    </h4>
-                    
-                    <div className="space-y-4">
-                      {lessonPlan.sessions?.map((session, sIdx) => {
-                        const isCompleted = !!completedSessions[sIdx];
-                        return (
-                          <div 
-                            key={sIdx} 
-                            onClick={() => setCompletedSessions(prev => ({ ...prev, [sIdx]: !prev[sIdx] }))}
-                            className={`border rounded-xl p-4 transition-all cursor-pointer flex gap-4 text-left ${isCompleted ? 'bg-[#F0F0E8] border-[#8A8A7A] opacity-85 shadow-none' : 'bg-white border-[#E0E0D5] hover:border-[#8A8A7A] hover:shadow-sm'}`}
-                          >
-                            <input 
-                              type="checkbox" 
-                              checked={isCompleted ?? false} 
-                              onChange={() => {}} // toggled on container click
-                              className="mt-1 h-4 w-4 rounded text-[#5A5A40] focus:ring-[#5A5A40] border-gray-300 cursor-pointer shrink-0"
-                            />
-                            <div className="flex-1">
-                              <div className="flex justify-between items-start gap-2 flex-wrap">
-                                <h5 className={`font-semibold text-sm ${isCompleted ? 'line-through text-[#8A8A7A]' : 'text-[#3A3A2F]'}`}>
-                                  {session.name}
-                                </h5>
-                                <span className="text-xs font-medium px-2 py-0.5 bg-[#FAF9F6] border border-[#E0E0D5] rounded-full text-[#5A5A40]">
-                                  {session.duration}
-                                </span>
-                              </div>
-                              <p className={`text-xs mt-1.5 leading-relaxed ${isCompleted ? 'text-[#8A8A7A]' : 'text-[#6A6A5A]'}`}>
-                                {session.description}
-                              </p>
-                              
-                              {session.objectives && session.objectives.length > 0 && (
-                                <div className="mt-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#8A8A7A] mb-1">Learning Objectives</p>
-                                  <ul className="list-disc pl-4 text-xs space-y-1 text-[#3A3A2F]">
-                                    {session.objectives.map((obj, oIdx) => (
-                                      <li key={oIdx} className={isCompleted ? 'text-[#8A8A7A] line-through' : ''}>{obj}</li>))}
-                                  </ul>
-                                </div>)}
-
-                              {session.activities && session.activities.length > 0 && (
-                                <div className="mt-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#8A8A7A] mb-1">Session Activities</p>
-                                  <ul className="list-decimal pl-4 text-xs space-y-1 text-[#3A3A2F]">
-                                    {session.activities.map((act, aIdx) => (
-                                      <li key={aIdx} className={isCompleted ? 'text-[#8A8A7A] line-through' : ''}>{act}</li>))}
-                                  </ul>
-                                </div>)}
-                            </div>
-                          </div>);
-                      })}
-                    </div>
-                  </div>)}
-
                 {/* 
                   Applying a handwriting font class when in student mode.
                 */}
-                <div 
-                  ref={notesRef}
-                  className={`prose max-w-none page-break-before exam-paper-table mx-auto bg-white shadow-xl ${(mode === 'student') && true ? `${handwritingFont} text-xl p-10 pb-16 rounded-sm relative` : 'font-sans text-[#4A4A3F] p-10 relative'}`}
+                {resultType === "exam-paper" && examPaperType === "paper-university" && (
+                  (() => {
+                    try {
+                      let cleanedText = resultText.trim();
+                      if (cleanedText.startsWith("```json")) {
+                        cleanedText = cleanedText.replace(/^```json/, "").replace(/```$/, "").trim();
+                      }
+                      const parsedData = JSON.parse(cleanedText);
+                      return <UniversityPaperEditor initialData={parsedData} />;
+                    } catch (e) {
+                      console.error("Failed to parse paper-university JSON:", e);
+                      return <div className="p-10 text-red-500 overflow-auto max-h-[80vh]">Error parsing generated paper format. Raw output: <pre className="mt-2 text-xs">{resultText}</pre></div>;
+                    }
+                  })()
+                )}
+                    <div 
+                      ref={notesRef}
+                  className={`prose max-w-none page-break-before exam-paper-table mx-auto ${resultType === 'exam-paper' && examPaperType === 'paper-university' ? 'hidden' : ''} bg-white shadow-xl ${(mode === 'student' && resultType !== 'exam-paper') ? `${handwritingFont} text-xl p-10 pb-16 rounded-sm relative` : 'font-sans text-[#4A4A3F] p-10 relative'}`}
                   style={Object.assign({
                     width: '210mm',
                     minHeight: '297mm',
                     boxSizing: 'border-box'
-                  }, (mode === 'student') && true ? {
+                  }, (mode === 'student' && resultType !== 'exam-paper') ? {
                     backgroundImage: pageStyle === 'ruled' 
                       ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
                       : pageStyle === 'box' 
@@ -3532,7 +3237,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                     color: penColor === 'blue' ? '#1d4ed8' : '#3A3A2F',
                   } as React.CSSProperties : {})}
                 >
-                  {(mode === 'student') && true && (
+                  {(mode === 'student' && resultType !== 'exam-paper') && (
                     <>
                       {pageStyle !== 'box' && <div className="absolute left-10 top-0 bottom-0 w-px bg-[#fee2e2]"></div>}
                       <div className="absolute bottom-8 right-10 flex gap-2">
@@ -3540,8 +3245,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                         <div className="w-2 h-2 rounded-full bg-[#dbeafe]"></div>
                       </div>
                     </>)}
-                  {(mode === 'student') && true && (
-                    <div className="pl-8">
+                  <div className={(mode === 'student' && resultType !== 'exam-paper') ? "pl-8" : ""}>
                       { resultText.split('---SET_SEPARATOR---').map((setMarkdown, index) => (
                         <div key={`set-${index}`} className="mb-10">
                           {setMarkdown.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i).map((pageMarkdown, pageIndex, pageArr) => (
@@ -3551,20 +3255,20 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                                 <ReactMarkdown
                                   remarkPlugins={[remarkGfm, remarkBreaks]}
                             components={{
-                              table: ({node, ...props}) => <div className="overflow-x-auto my-4 w-full"><table className={`w-full border-collapse ${mode === 'student' ? `border-2 border-opacity-20 ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} /></div>,
-                              th: ({node, ...props}) => <th className={`p-2 text-left ${mode === 'student' ? `border-b-2 border-opacity-20 bg-transparent font-bold text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black bg-gray-200'}`} {...props} />,
-                              td: ({node, ...props}) => <td className={`p-2 ${mode === 'student' ? `border-b border-opacity-20 text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} />,
-                              li: ({node, ...props}) => <li className={`mb-2 ${mode === 'student' ? `text-inherit ${handwritingFont}` : ''}`} {...props} />,
-                              h1: ({ children }) => <h1 className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</h1>,
-                              h2: ({ children }) => <h2 className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</h2>,
-                              h3: ({ children }) => <h3 className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</h3>,
-                              h4: ({ children }) => <h4 className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</h4>,
-                              h5: ({ children }) => <h5 className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</h5>,
-                              h6: ({ children }) => <h6 className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</h6>,
-                              strong: ({ children }) => <strong className={`font-bold ${mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}`}>{children}</strong>,
-                              em: ({ children }) => <em className={mode === 'student' ? '!text-[#3A3A2F]' : 'text-inherit'}>{children}</em>,
+                              table: ({node, ...props}) => <div className="overflow-x-auto my-4 w-full"><table className={`w-full border-collapse ${(mode === 'student' && resultType !== 'exam-paper') ? `border-2 border-opacity-20 ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} /></div>,
+                              th: ({node, ...props}) => <th className={`p-2 text-left ${(mode === 'student' && resultType !== 'exam-paper') ? `border-b-2 border-opacity-20 bg-transparent font-bold text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black bg-gray-200'}`} {...props} />,
+                              td: ({node, ...props}) => <td className={`p-2 ${(mode === 'student' && resultType !== 'exam-paper') ? `border-b border-opacity-20 text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} />,
+                              li: ({node, ...props}) => <li className={`mb-2 ${(mode === 'student' && resultType !== 'exam-paper') ? `text-inherit ${handwritingFont}` : 'text-blue-600'}`} {...props} />,
+                              h1: ({ children }) => <h1 className={`text-4xl md:text-5xl mt-10 mb-6 font-extrabold !text-black leading-tight tracking-tight`}>{children}</h1>,
+                              h2: ({ children }) => <h2 className={`text-3xl md:text-4xl mt-8 mb-5 font-bold !text-black leading-snug tracking-tight`}>{children}</h2>,
+                              h3: ({ children }) => <h3 className={`text-2xl mt-6 mb-4 font-bold !text-black`}>{children}</h3>,
+                              h4: ({ children }) => <h4 className={`font-bold !text-black`}>{children}</h4>,
+                              h5: ({ children }) => <h5 className={`font-bold !text-black`}>{children}</h5>,
+                              h6: ({ children }) => <h6 className={`font-bold !text-black`}>{children}</h6>,
+                              strong: ({ children }) => <strong className={(mode === 'student' && resultType !== 'exam-paper') ? 'font-bold text-inherit' : 'font-bold !text-black'}>{children}</strong>,
+                              em: ({ children }) => <em className={(mode === 'student' && resultType !== 'exam-paper') ? 'text-inherit' : 'text-blue-600'}>{children}</em>,
                               pre({ node, children, ...props }: any) {
-                                return <pre {...props} className={`${props.className || ''} ${(mode === 'student') ? 'bg-[#F9F9F7] border border-[#E0E0D5] rounded p-4' : 'bg-gray-100 p-2'}`}>{children}</pre>;
+                                return <pre {...props} className={`${props.className || ''} ${(mode === 'student' && resultType !== 'exam-paper') ? 'bg-[#F9F9F7] border border-[#E0E0D5] rounded p-4' : 'bg-gray-100 p-2'}`}>{children}</pre>;
                               },
                               code({ node, inline, className, children, ...props }: any) {
                                 const match = /language-(\w+)/.exec(className || '');
@@ -3578,11 +3282,13 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                                 }
 
                                 return (
-                                  <code className={`${className} ${(mode === 'student') && !inline ? `${handwritingFont} text-lg` : ''}`} {...props}>
+                                  <code className={`${className} ${(mode === 'student' && resultType !== 'exam-paper') && !inline ? `${handwritingFont} text-lg` : ''}`} {...props}>
                                     {children}
                                   </code>);
                               },
                               p: ({node, children, ...props}: any) => {
+                                const isStudent = mode === 'student' && resultType !== 'exam-paper';
+                                const pClass = `mb-4 ${isStudent ? `text-inherit ${handwritingFont}` : 'text-blue-600'}`;
                                 const content = String(children);
                                 if (content.includes("[DIAGRAM:")) {
                                   const match = content.match(/\[DIAGRAM:(.*?)\]/);
@@ -3618,7 +3324,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                                   return <p className="font-bold text-black">{children}</p>;
                                 }
 
-                                return <p {...props}>{children}</p>;
+                                return <p className={pClass} {...props}>{children}</p>;
                               }
 
                             }
@@ -3629,7 +3335,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                         </div>
                       </div>))}
                         </div>))}
-                    </div>)}
+                  </div>
 
                 </div>
               </div>
@@ -3784,6 +3490,16 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                         <p className={`text-sm mt-1 ${isDarkMode ? "text-[#A1A194]" : "text-[#8A8A7A]"}`}>Review key terminology and concepts</p>
                       </div>
                       <div className="flex items-center gap-4">
+                        <select
+                          value={flashcardThemeStyle}
+                          onChange={(e) => setFlashcardThemeStyle(e.target.value as any)}
+                          className={`text-xs font-semibold py-2 px-3 rounded-full outline-none transition-colors ${isDarkMode ? "bg-[#282824] text-[#C2C2B0] border border-[#383832]" : "bg-[#F0F0E8] text-[#5A5A40] border border-[#E0E0D5]"}`}
+                        >
+                          <option value="default">Default Theme</option>
+                          <option value="pastel">Soft Pastel</option>
+                          <option value="monochrome">Monochrome</option>
+                          <option value="high-contrast">High Contrast</option>
+                        </select>
                         <div className={`text-xs font-semibold py-2 px-4 rounded-full ${isDarkMode ? "bg-[#282824] text-[#C2C2B0]" : "bg-[#F0F0E8] text-[#5A5A40]"}`}>
                           Progress: {currentCardIndex + 1} / {flashcards.length}
                         </div>

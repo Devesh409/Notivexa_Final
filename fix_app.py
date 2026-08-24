@@ -1,35 +1,29 @@
-import re
-with open("src/App.tsx", "r") as f:
-    text = f.read()
+import sys
+with open('src/App.tsx', 'r') as f:
+    lines = f.readlines()
 
-target = """  if (hasError) {
-    if (parsedNodes.length > 0) {
-      return (
-        <div className={`my-8 p-6 rounded-2xl border shadow-sm ${isDarkMode ? "bg-[#22221F] border-[#383832]" : "bg-gradient-to-br from-white via-sky-50/40 to-indigo-50/20 border-slate-200"}`}>
-          <div className="flex items-center gap-2 mb-4">
-            <Sparkles size={16} className="text-sky-600" />
-            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Concept Flow Diagram</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            {parsedNodes.map((node, i) => (
-              <React.Fragment key={i}>
-                <div className="p-3 px-4 rounded-xl bg-white border border-slate-200/90 shadow-2xs text-xs font-semibold text-slate-800 flex items-center gap-2 max-w-xs">
-                  <span className="w-5 h-5 rounded-full bg-sky-100 text-sky-700 text-[10px] font-bold flex items-center justify-center shrink-0">{i + 1}</span>
-                  <span>{node.label}</span>
-                </div>
-                {i < parsedNodes.length - 1 && (
-                  <ArrowRight size={16} className="text-sky-500 shrink-0" />
-                )}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
-      );
-    }"""
+# The error TS1381 is at src/App.tsx(3631,17):
+#                 {/* 
+#                   Intercept UniversityPaperEditor if the JSON parses
+#                 */}
 
-replacement = """  if (hasError) {"""
+start_idx = -1
+for i, line in enumerate(lines):
+    if "Intercept UniversityPaperEditor if the JSON parses" in line:
+        start_idx = i - 1 # The {/* line
+        break
 
-text = text.replace(target, replacement)
+if start_idx == -1:
+    print("Could not find block")
+    sys.exit(1)
 
-with open("src/App.tsx", "w") as f:
-    f.write(text)
+# Find where the `notesRef` is:
+end_idx = -1
+for i in range(start_idx, len(lines)):
+    if "ref={notesRef}" in lines[i]:
+        end_idx = i
+        break
+
+print(f"Block from {start_idx} to {end_idx}:")
+for i in range(start_idx, end_idx+1):
+    print(lines[i], end="")

@@ -226,44 +226,17 @@ async function getContentParts(fileUri: string, mimeType: string, prompt: string
     ];
   }
 
-  const cachedText = pdfTextCache.get(fileUri);
-  if (cachedText && cachedText.trim().length > 100) {
-    // We have extracted text. Let's check the size and safely truncate if needed.
-    // 3,000,000 characters is roughly 750,000 tokens, well under the 1,048,576 limit.
-    const maxCharacters = 3000000;
-    let textToUse = cachedText;
-    let wasTruncated = false;
-    if (cachedText.length > maxCharacters) {
-      textToUse = cachedText.slice(0, maxCharacters);
-      wasTruncated = true;
+  // Always use fileData natively so that Gemini scans the document page by page
+  // including all image-based scanned pages, diagrams, and text.
+  return [
+    {
+      role: "user",
+      parts: [
+        { fileData: { fileUri, mimeType } },
+        { text: prompt }
+      ]
     }
-    
-    let textContent = textToUse;
-    if (wasTruncated) {
-      textContent += "\n\n[NOTE: The document was extremely large and has been truncated to fit within the AI's processing limits.]";
-    }
-    
-    return [
-      {
-        role: "user",
-        parts: [
-          { text: `Here is the textbook/study material content:\n\n${textContent}` },
-          { text: prompt }
-        ]
-      }
-    ];
-  } else {
-    // Fallback to direct fileUri (e.g. for scanned PDFs, image scans, or when cache is empty)
-    return [
-      {
-        role: "user",
-        parts: [
-          { fileData: { fileUri, mimeType } },
-          { text: prompt }
-        ]
-      }
-    ];
-  }
+  ];
 }
 
 // Helper to safely parse JSON from model responses, extracting from markdown code blocks or brackets if needed
@@ -524,12 +497,13 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 1, initial
 
 async function generateContentWithFallback(ai: any, params: any): Promise<any> {
   const modelsToTry = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash-lite"
+    "gemini-3.6-flash",
+    "gemini-3.6-flash",
+    "gemini-3.6-flash",
+    "gemini-3.6-flash",
+    "gemini-3.6-flash"
   ];
-  const initialModel = params.model || "gemini-3.5-flash-lite";
+  const initialModel = params.model || "gemini-3.6-flash";
   const uniqueModels = Array.from(new Set([initialModel, ...modelsToTry]));
   
   let lastError: any = null;
@@ -593,23 +567,45 @@ function formatGeminiError(error: any): string {
 // 7. AI Chatbot
 app.post("/api/chat", async (req, res) => {
   try {
-    const { prompt, fileUri, mimeType } = req.body;
+    const { prompt, fileUri, mimeType, history = [] } = req.body;
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const ai = getGenAI();
 
-    const fullPrompt = `You are an AI study assistant. Answer the following question based on the provided document/book context.
-    
-    Provide the answer as a list of points. Each point must start on a new line, prefixed with a • symbol, and there must be a blank line between each point.
-    Do NOT use any Markdown formatting characters, especially # and *.
-    
-    Question: ${prompt}`;
+    let contents = [];
+    const sysPrompt = "You are a highly capable AI tutor and study assistant. You help students understand concepts, answer questions, and break down complex topics based on the provided document context. Use rich Markdown formatting (bold, italics, lists, code blocks, tables) to make your explanations structured and easy to read. Be encouraging, precise, and educational.";
 
-    const contents = fileUri 
-      ? await getContentParts(fileUri, mimeType || "application/pdf", fullPrompt)
-      : [{ role: "user", parts: [{ text: fullPrompt }] }];
+    if (fileUri) {
+      // Get the document contents
+      const fileParts = await getContentParts(fileUri, mimeType || "application/pdf", "");
+      // fileParts[0] is { role: "user", parts: [ {text: doc}, {text: prompt} ] }
+      // We will replace the prompt part with our sys instruction
+      const docMsg = fileParts[0];
+      if (docMsg && docMsg.parts) {
+        docMsg.parts[docMsg.parts.length - 1] = { text: sysPrompt };
+      }
+      contents.push(docMsg);
+      contents.push({ role: "model", parts: [{ text: "Understood. I have reviewed the document and am ready to act as your AI tutor." }] });
+    } else {
+      contents.push({ role: "user", parts: [{ text: sysPrompt }] });
+      contents.push({ role: "model", parts: [{ text: "Understood. I am ready to act as your AI tutor." }] });
+    }
+
+    // Append history
+    for (const msg of history) {
+      contents.push({
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: [{ text: msg.text }]
+      });
+    }
+
+    // Append current prompt
+    contents.push({
+      role: "user",
+      parts: [{ text: prompt }]
+    });
 
     const response = await generateContentWithFallback(ai, {
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.6-flash",
       contents: contents
     });
     return res.json({ result: response.text });
@@ -679,9 +675,10 @@ app.post("/api/generate-notes", async (req, res) => {
     if (!fileUri) return res.status(400).json({ error: "Missing fileUri" });
         const ai = getGenAI();
     
-        let lengthInstructions = `1. Generate an EXHAUSTIVE summary. You MUST output at least 100 distinct pages. 
-      2. To achieve this within token limits, insert the EXACT string "---PAGE_BREAK---" on a new line VERY FREQUENTLY (e.g., after every 50-80 words or every single major bullet point).
-      3. Do NOT stop until you have generated at least 100 "---PAGE_BREAK---" markers. Keep expanding on the topic with extreme depth, examples, quizzes, and derivations until you hit the 100-page mark.`;
+        let lengthInstructions = `Generate a highly comprehensive and detailed summary of the provided text.
+      Break the summary into logical pages using the "---PAGE_BREAK---" marker between major sections or topics.
+      Aim for a detailed summary, providing step-by-step breakdowns and examples, but keep it concise if the content is extremely large to prevent timeouts.
+      Ensure the output does not exceed the model token limits and stays within a reasonable processing time.`;
 
     const prompt = `
       You are an expert teacher and exam notes writer. I have provided a book or study material.
@@ -697,24 +694,25 @@ app.post("/api/generate-notes", async (req, res) => {
       4. For algorithms, use a numbered list (1., 2., 3...).
       5. For comparisons, use a simple text-based Markdown table format. IMPORTANT: If you need to include list items or new lines INSIDE a table cell, you MUST use the HTML <br> tag to separate them (e.g., - Point 1<br>- Point 2). DO NOT use unicode bullets or spaces to separate list items in tables.
       6. For diagrams, use Mermaid syntax inside a mermaid code block. DO NOT generate any text explanation, summary, or legend before or after the diagram. Just the diagram itself.
-      7. Use bold formatting (**) for key points and important terms to enhance readability. Do NOT use # for headers.
+      7. Use bold formatting (**) for key points and important terms to enhance readability. At the very beginning, ALWAYS provide the Chapter Name, Unit Name, and Title in a BIG FONT using Markdown Headers (# and ##).
       8. End with a short conclusion if needed.
       
       
 
       Tasks:
       ${lengthInstructions}
-      3. Convert the content into structured, step-by-step study notes suitable for a student.
-      4. ALGORITHMS: Whenever an algorithm is discussed, extract it and format it clearly as a STEP-BY-STEP numbered list.
-      5. SCAN EXACT DIAGRAMS IN THE BOOK: Whenever there is a diagram, chart, or figure in the original text, you MUST recreate it accurately using Mermaid.js syntax inside a markdown mermaid block. This is critical for visual learning. DO NOT USE placeholders like [DIAGRAM], USE MERMAID. If a diagram exists in the book, it is mandatory to recreate it in Mermaid. DO NOT output any text explaining the diagram before or after the Mermaid block.
-      6. COMPARISONS AND DIFFERENCES: Whenever the text discusses differences between concepts or compares multiple things, YOU MUST format these comparisons as Markdown TABLES.
+      3. PAGE-BY-PAGE SCAN: Carefully scan the uploaded file ONE BY ONE PAGE. You must read both text and image-based (scanned) pages, extracting all relevant information.
+      4. Convert the content into structured, step-by-step study notes suitable for a student.
+      5. ALGORITHMS: Whenever an algorithm is discussed, extract it and format it clearly as a STEP-BY-STEP numbered list.
+      6. IMAGE-BASED DIAGRAMS & CHARTS: Whenever there is a diagram, chart, block diagram, or figure in the original text (whether it is a digital graphic or an image-based scanned diagram), you MUST scan it and accurately recreate it using Mermaid.js syntax inside a markdown mermaid block, and add it directly into the generated summary. This is critical for visual learning. DO NOT USE placeholders like [DIAGRAM], USE MERMAID. DO NOT output any text explaining the diagram before or after the Mermaid block.
+      7. COMPARISONS AND DIFFERENCES: Whenever the text discusses differences between concepts or compares multiple things, YOU MUST format these comparisons as Markdown TABLES. YOU MUST provide a minimum of 10 differences/points of comparison whenever possible.
       
       Note: Keep Mermaid node labels clean and concise. Each Mermaid statement must be on its own line. DO NOT include any node legends, map keys, or descriptive legend boxes in the diagrams.
     `;
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           maxOutputTokens: 8192,
@@ -779,7 +777,7 @@ app.post("/api/generate-assessment", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt)
       });
       return res.json({ result: response.text });
@@ -833,7 +831,7 @@ Ensure every diagram has 3 to 5 clear item nodes describing steps, layers, compo
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt)
       });
       const cleanText = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -940,7 +938,7 @@ app.post("/api/generate-flashcards", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -977,7 +975,7 @@ app.post("/api/generate-flashcards", async (req, res) => {
 // 6. Generate Comprehensive Question Bank
 app.post("/api/generate-question-bank", async (req, res) => {
   try {
-    const { fileUri, mimeType, questionType = "all", bloomLevel = "all", mode } = req.body;
+    const { fileUri, mimeType, questionType = "all", bloomLevel = "all", mode, totalMarks } = req.body;
     if (!fileUri) return res.status(400).json({ error: "Missing fileUri" });
     const ai = getGenAI();
     
@@ -1016,6 +1014,103 @@ app.post("/api/generate-question-bank", async (req, res) => {
       For EACH long-answer question, you MUST provide:
       1. A detailed, structured step-by-step breakdown explaining the underlying concepts deeply.
       2. A relevant, highly detailed visual schematic or flow diagram written using Mermaid.js syntax inside a markdown mermaid block for at least the first 5 questions (you can skip diagrams for the remaining 45 to save space).`;
+    } else if (questionType === "paper-full") {
+      typeInstructions = `## FULL EXAM QUESTION PAPER${bloomInstructions}
+      Generate a comprehensive and well-structured Question Paper covering the provided material. The paper MUST be divided into the following sections:
+      
+      ### SECTION A: MULTIPLE CHOICE QUESTIONS (MCQs) (1 Mark Each)
+      Provide exactly 30 high-quality MCQs covering key concepts.
+      Format:
+      **Q1. [Question]**
+      A) [Option A]
+      B) [Option B]
+      C) [Option C]
+      D) [Option D]
+      **Correct Answer**: [Correct Option]
+      
+      ### SECTION B: SHORT ANSWER QUESTIONS (2, 3, and 4 Marks)
+      Provide exactly 12 Short Answer questions designed to test comprehension and explanation:
+      - Four 2-Mark Questions
+      - Four 3-Mark Questions
+      - Four 4-Mark Questions
+      Format:
+      **Q[X]. [Question] ([Y] Marks)**
+      *Sample Answer*: [Provide the expected answer]
+
+      ### SECTION C: LONG ANSWER QUESTIONS (5, 8, and 10 Marks)
+      Provide exactly 8 Long Answer questions testing deep understanding, analysis, and mechanics:
+      - Three 5-Mark Questions
+      - Three 8-Mark Questions
+      - Two 10-Mark Questions
+      Format:
+      **Q[X]. [Question] ([Y] Marks)**
+      *Sample Answer Breakdown*: [Detailed response]`;
+    } else if (questionType === "paper-university") {
+      const requestedMarks = totalMarks || 60;
+      typeInstructions = `## UNIVERSITY EXAM QUESTION PAPER FORMAT (JSON OUTPUT ONLY)${bloomInstructions}
+      Generate a formal university-style exam question paper based on the provided material, specifically designed for a total of ${requestedMarks} Marks.
+      You MUST output EXACTLY a valid JSON object (without markdown code blocks like \`\`\`json) matching this schema:
+      {
+        "collegeName": "PILLAI HOC COLLEGE OF ENGINEERING & TECHNOLOGY, RASAYANI",
+        "accreditation": "(Autonomous) (Accredited 'A+' by NAAC)",
+        "examName": "PRELIMINARY SH 2025 EXAMINATION",
+        "department": "Department of Computer Application",
+        "branch": "COMPUTER APPLICATION (MCA)",
+        "semester": "[Infer]",
+        "subject": "[Infer]",
+        "time": "02.00 Hours",
+        "date": "[Current Date]",
+        "maxMarks": ${requestedMarks},
+        "subjectCode": "[Generate Code]",
+        "instructions": [
+          "Read instructions carefully.",
+          "Figures to the right indicate full marks."
+        ],
+        "questions": [
+          { "type": "main", "qNo": "Q.1", "text": "Attempt any questions as instructed", "marks": "", "bt": "", "co": "" },
+          { "type": "sub", "qNo": "a)", "text": "[Question Text]", "marks": "5", "bt": "2", "co": "1" }
+        ],
+        "footer": "CO1- ... BT Levels: 1 Remembering, 2 Understanding, 3 Applying, 4 Analyzing, 5 Evaluating, 6 Creating."
+      }
+      
+      Guidelines:
+      - Design the questions and main question blocks such that the total marks the student is expected to attempt sum up perfectly to ${requestedMarks} marks.
+      - Automatically formulate the 'instructions' array (e.g. "Q1 is compulsory", "Solve any 3 from the rest") to logically match your designed structure for ${requestedMarks} marks.
+      - Provide sub-questions inside the main questions, with correct "marks" fields. Ensure the sum of attempting the required questions equals ${requestedMarks}.
+      - Bloom's Taxonomy (bt): 1-6.
+      - Course Outcome (co): 1-6.
+      - Return ONLY the JSON object. Do NOT wrap in \`\`\`json.`;
+    } else if (questionType === "paper-mcq") {
+      typeInstructions = `## EXAM QUESTION PAPER: MULTIPLE CHOICE (1 Mark Each)${bloomInstructions}
+      Provide EXACTLY 50 MCQs formatted for an exam paper.
+      Format:
+      **Q1. [Question] (1 Mark)**
+      A) [Option]
+      B) [Option]
+      C) [Option]
+      D) [Option]
+      
+      **Correct Answer**: [Correct Option]`;
+    } else if (questionType === "paper-short") {
+      typeInstructions = `## EXAM QUESTION PAPER: SHORT ANSWER QUESTIONS${bloomInstructions}
+      Provide exactly 50 Short Answer questions tailored for a structured exam paper, divided as follows:
+      - Twenty 2-Mark Questions
+      - Fifteen 3-Mark Questions
+      - Fifteen 4-Mark Questions
+      
+      Format:
+      **Q1. [Question] (X Marks)**
+      *Sample Ideal Answer*: [Crisp, well-structured answer paragraph]`;
+    } else if (questionType === "paper-long") {
+      typeInstructions = `## EXAM QUESTION PAPER: LONG ANSWER QUESTIONS${bloomInstructions}
+      Provide exactly 50 Long Answer / Essay type questions designed for a major exam section, divided as follows:
+      - Twenty 5-Mark Questions (structured paragraphs)
+      - Fifteen 8-Mark Questions (in-depth analysis, multi-part)
+      - Fifteen 10-Mark Questions (comprehensive, extensive detail, requiring visual diagram)
+      
+      Format:
+      **Q1. [Question] (X Marks)**
+      *Sample Answer Breakdown*: [Extensive detail, step-by-step breakdown. For 10-Mark questions, include a Mermaid diagram block]`;
     } else {
       typeInstructions = `## SECTION 1: MULTIPLE CHOICE QUESTIONS (MCQs)
       Provide EXACTLY 50 rigorous, high-quality MCQs covering key concepts.
@@ -1088,11 +1183,12 @@ app.post("/api/generate-question-bank", async (req, res) => {
     
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           maxOutputTokens: 8192,
           temperature: 0.7,
+          ...(questionType === "paper-university" ? { responseMimeType: "application/json" } : {})
         }
       });
       return res.json({ result: response.text });
@@ -1121,14 +1217,14 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
       Focus Area/Custom request: ${focusArea || "General study structure"}
       
       CRITICAL REQUIREMENT:
-      Estimate the "Duration of Study Completion" (how many total hours or sessions, e.g. "12 Hours (recommended over 6 days at 2 hours per session)"). Provide this clearly in the 'duration' and 'totalSessions' fields of the output.
+      Estimate the "Duration of Study Completion" (how many total hours or weeks). Provide this clearly in the 'duration' and 'totalUnits' fields of the output.
       
-      In your 'fullMarkdownPlan', provide an in-depth lesson plan:
-      1. Break down the provided textbook or study material into sequential study sessions.
-      2. For each session, specify:
-         - Session topic name and duration (e.g. "Session 1: Introduction to X (90 minutes)")
+      In your 'fullMarkdownPlan', provide an in-depth lesson plan ONLY IN TEXT FORMAT:
+      1. Break down the provided textbook or study material into sequential **Units and Chapters** (NOT sessions).
+      2. For each Unit and Chapter, specify:
+         - Unit/Chapter name and estimated duration
          - Specific learning objectives for the student
-         - Step-by-step study tasks (e.g. "Step 1: Read Section 1.1 (40 mins)", "Step 2: Solve odd-numbered problems in practice bank (30 mins)", "Step 3: Revise with flashcards (20 mins)")
+         - Step-by-step study tasks (e.g. "Step 1: Read Section 1.1", "Step 2: Solve practice questions")
          - Self-assessment focus questions
       3. An optimization/tips section outlining dynamic rest periods (Pomodoro technique), memory consolidation strategies, and visual diagram review.
       
@@ -1138,7 +1234,7 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1146,8 +1242,8 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
             type: Type.OBJECT,
             properties: {
               duration: { type: Type.STRING },
-              totalSessions: { type: Type.STRING },
-              sessions: {
+              totalUnits: { type: Type.STRING },
+              units: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
@@ -1163,11 +1259,11 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
               },
               fullMarkdownPlan: { type: Type.STRING }
             },
-            required: ["duration", "totalSessions", "sessions", "fullMarkdownPlan"]
+            required: ["duration", "totalUnits", "units", "fullMarkdownPlan"]
           }
         }
       });
-      
+        
       const parsedPlan = safeParseJson(response.text || "{}");
       return res.json({ lessonPlan: parsedPlan || {} });
     } catch (error: any) {
@@ -1178,8 +1274,7 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
     }
   } catch (error: any) {
     console.error("Lesson plan outer error:", error);
-    const formatted = formatGeminiError(error);
-    return res.status(500).json({ error: formatted });
+    res.status(500).json({ error: "Failed to process request." });
   }
 });
 
@@ -1209,7 +1304,7 @@ app.post("/api/generate-video-explanation", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1297,7 +1392,7 @@ app.post("/api/generate-ppt", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1396,6 +1491,10 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(err.status || 500).json({
     error: err.message || "Internal Server Error"
   });
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
 });
 
 app.all("/api/*", (req, res) => {

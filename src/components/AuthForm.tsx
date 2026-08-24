@@ -23,32 +23,54 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className={`p-6 rounded-xl border ${isDarkMode ? "bg-[#22221F] border-[#383832]" : "bg-white border-slate-200"} shadow-sm w-full max-w-sm`}>
-      <h2 className={`text-xl font-bold mb-4 ${isDarkMode ? "text-slate-200" : "text-slate-800"}`}>
-        {isLogin ? "Login" : "Register"}
-      </h2>
-      {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
-      <input
-        type="email"
-        placeholder="Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        className="w-full p-2 mb-4 border rounded-md"
-        required
-      />
-      <input
-        type="password"
-        placeholder="Password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        className="w-full p-2 mb-4 border rounded-md"
-        required
-      />
-      <button type="submit" className="w-full p-2 bg-sky-600 text-white rounded-md mb-4">
-        {isLogin ? "Login" : "Register"}
+    <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
+      {error && (
+        <div className={`p-3 rounded-xl text-sm ${isDarkMode ? 'bg-red-900/30 text-red-400 border border-red-800' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+          {error}
+        </div>
+      )}
+      <div className="flex flex-col text-left">
+        <label className={`text-sm font-medium mb-1.5 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>Email Address</label>
+        <input
+          type="email"
+          placeholder="Enter your email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className={`w-full px-4 py-3 rounded-xl border transition-all focus:ring-2 outline-none ${
+            isDarkMode 
+              ? 'bg-[#1C1C19] border-[#4A4A3F] focus:border-sky-500 focus:ring-sky-500/20 text-[#F5F5F0]' 
+              : 'bg-slate-50 border-slate-200 focus:border-sky-500 focus:ring-sky-500/20 text-slate-900'
+          }`}
+          required
+        />
+      </div>
+      <div className="flex flex-col text-left">
+        <label className={`text-sm font-medium mb-1.5 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>Password</label>
+        <input
+          type="password"
+          placeholder="••••••••"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className={`w-full px-4 py-3 rounded-xl border transition-all focus:ring-2 outline-none ${
+            isDarkMode 
+              ? 'bg-[#1C1C19] border-[#4A4A3F] focus:border-sky-500 focus:ring-sky-500/20 text-[#F5F5F0]' 
+              : 'bg-slate-50 border-slate-200 focus:border-sky-500 focus:ring-sky-500/20 text-slate-900'
+          }`}
+          required
+        />
+      </div>
+      <button 
+        type="submit" 
+        className="w-full mt-2 py-3.5 px-6 rounded-xl font-semibold text-white bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 transition-all shadow-md shadow-sky-500/20 active:scale-[0.98]"
+      >
+        {isLogin ? "Sign In with Email" : "Create Account"}
       </button>
-      <button type="button" onClick={() => setIsLogin(!isLogin)} className="w-full text-sm text-sky-600 underline">
-        {isLogin ? "Need an account? Register" : "Have an account? Login"}
+      <button 
+        type="button" 
+        onClick={() => setIsLogin(!isLogin)} 
+        className={`w-full text-sm font-medium transition-colors ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-600 hover:text-sky-700'}`}
+      >
+        {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
       </button>
     </form>
   );

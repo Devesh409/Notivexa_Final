@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { X, ChevronLeft, ChevronRight, Presentation, ZoomIn, ZoomOut, RotateCcw, Maximize, Minimize } from 'lucide-react';
-import { Slide } from '../types.ts';
+import { Slide } from '../types';
 
 interface SlidePreviewModalProps {
   slides: Slide[];
-  theme?: "academic" | "professional" | "minimalist";
+  theme?: "academic" | "professional" | "minimalist" | "pastel";
   onClose: () => void;
 }
 
@@ -119,23 +119,23 @@ export const SlidePreviewModal: React.FC<SlidePreviewModalProps> = ({ slides, th
                   height: `${slideHeight}px`,
                   transform: `scale(${zoomLevel})`,
                   transformOrigin: 'top left',
-                  backgroundColor: theme === "professional" ? "#FFFFFF" : theme === "minimalist" ? "#F8FAFC" : "#FDFBF7",
-                  fontFamily: theme === "professional" ? "Arial, sans-serif" : theme === "minimalist" ? "Helvetica, sans-serif" : '"Times New Roman", Times, serif'
+                  backgroundColor: theme === "professional" ? "#FFFFFF" : theme === "minimalist" ? "#F8FAFC" : theme === "pastel" ? "#FEF2F2" : "#FDFBF7",
+                  fontFamily: theme === "professional" ? "Arial, sans-serif" : theme === "minimalist" || theme === "pastel" ? "Helvetica, sans-serif" : '"Times New Roman", Times, serif'
                 }}
               >
                 {/* Minimalist Top Accent */}
                 {theme !== "minimalist" && (
                   <>
-                    <div className={`absolute top-0 left-0 w-full h-2 ${theme === "professional" ? "bg-blue-600" : "bg-rose-600"}`}></div>
-                    <div className={`absolute bottom-0 left-0 w-full h-1 ${theme === "professional" ? "bg-blue-600" : "bg-rose-600"}`}></div>
+                    <div className={`absolute top-0 left-0 w-full h-2 ${theme === "professional" ? "bg-blue-600" : theme === "pastel" ? "bg-pink-300" : "bg-rose-600"}`}></div>
+                    <div className={`absolute bottom-0 left-0 w-full h-1 ${theme === "professional" ? "bg-blue-600" : theme === "pastel" ? "bg-pink-300" : "bg-rose-600"}`}></div>
                   </>
                 )}
                 
-                <div className={`text-xs font-bold mb-6 uppercase tracking-wider ${theme === "professional" ? "text-blue-500" : theme === "minimalist" ? "text-gray-500" : "text-pink-500"}`}>
+                <div className={`text-xs font-bold mb-6 uppercase tracking-wider ${theme === "professional" ? "text-blue-500" : theme === "minimalist" ? "text-gray-500" : theme === "pastel" ? "text-pink-600" : "text-pink-500"}`}>
                   {currentSlide.slideType || "Content"} Slide
                 </div>
                 
-                <h2 className={`text-4xl md:text-6xl font-bold mb-8 leading-tight ${theme === "minimalist" ? "text-black" : theme === "professional" ? "text-slate-800" : "text-[#0F172A]"}`}>
+                <h2 className={`text-4xl md:text-6xl font-bold mb-8 leading-tight ${theme === "minimalist" ? "text-black" : theme === "professional" ? "text-slate-800" : theme === "pastel" ? "text-pink-950" : "text-[#0F172A]"}`}>
                   {currentSlide.title}
                 </h2>
                 
@@ -143,8 +143,8 @@ export const SlidePreviewModal: React.FC<SlidePreviewModalProps> = ({ slides, th
                   {currentSlide.bullets && currentSlide.bullets.length > 0 && (
                     <ul className="space-y-4">
                       {(currentSlide?.bullets || []).map((bullet, idx) => (
-                        <li key={idx} className={`flex items-start text-xl md:text-2xl leading-relaxed ${theme === "minimalist" ? "text-black" : theme === "professional" ? "text-slate-600" : "text-[#334155]"}`}>
-                          <span className={`${theme === "professional" ? "text-blue-600" : theme === "minimalist" ? "text-black" : "text-rose-600"} mr-4 text-3xl leading-none`}>•</span>
+                        <li key={idx} className={`flex items-start text-xl md:text-2xl leading-relaxed ${theme === "minimalist" ? "text-black" : theme === "professional" ? "text-slate-600" : theme === "pastel" ? "text-pink-900" : "text-[#334155]"}`}>
+                          <span className={`${theme === "professional" ? "text-blue-600" : theme === "minimalist" ? "text-black" : theme === "pastel" ? "text-pink-400" : "text-rose-600"} mr-4 text-3xl leading-none`}>•</span>
                           <span>{bullet}</span>
                         </li>
                       ))}
