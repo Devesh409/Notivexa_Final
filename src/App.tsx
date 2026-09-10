@@ -197,7 +197,7 @@ function MermaidChart({ chart, handwritingFont, mode, penColor, isDarkMode }: { 
           setHasError(true);
           const level2Id = `mermaid-${Math.random().toString(36).substring(7)}`; // Dummy
 
-          mermaid.render(level2Id, level2Chart).then(({ svg }) => {
+          mermaid.render(level2Id, fallbackChart).then(({ svg }) => {
             if (svg.includes("Syntax error")) throw new Error("Mermaid syntax error SVG");
             if (ref.current) {
               ref.current.innerHTML = svg;
@@ -365,23 +365,9 @@ export default function App() {
   const notesRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Extended state for Custom Books
-  const [customBooks, setCustomBooks] = useState<any[]>([]);
-  const [customBooksLoading, setCustomBooksLoading] = useState(false);
-  
   // Library UI state
   const [selectedDept, setSelectedDept] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [isAddBookOpen, setIsAddBookOpen] = useState(false);
-  const [newBookTitle, setNewBookTitle] = useState("");
-  const [newBookAuthor, setNewBookAuthor] = useState("");
-  const [newBookDept, setNewBookDept] = useState("MCA");
-  const [newBookType, setNewBookType] = useState<"link" | "file">("link");
-  const [newBookLink, setNewBookLink] = useState("");
-  const [newBookFile, setNewBookFile] = useState<File | null>(null);
-  const [newBookDesc, setNewBookDesc] = useState("");
-  const [isSavingBook, setIsSavingBook] = useState(false);
-  const [addBookError, setAddBookError] = useState<string | null>(null);
 
   const defaultLibraryBooks = [
     // Classical books for backwards compatibility
@@ -422,12 +408,12 @@ export default function App() {
     { id: "book:history_western_philosophy", title: "A History of Western Philosophy", author: "Bertrand Russell", desc: "A comprehensive analysis of philosophical thought from the pre-Socratics to 20th-century analytical philosophy.", department: "Arts" }
   ];
 
-  const allLibraryBooks = [...customBooks, ...defaultLibraryBooks];
+  const allLibraryBooks = defaultLibraryBooks;
   const libraryBooks = allLibraryBooks;
 
   const getActiveBook = () => {
     if (!fileData || !fileData.fileUri) return null;
-    return allLibraryBooks.find(b => b.id === fileData.fileUri || (b.fileUri && b.fileUri === fileData.fileUri));
+    return allLibraryBooks.find(b => b.id === fileData.fileUri || ((b as any).fileUri && (b as any).fileUri === fileData.fileUri));
   };
 
   const startCamera = async () => {
@@ -576,43 +562,8 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  useEffect(() => {
-    if (!user) {
-      setCustomBooks([]);
-      return;
-    }
-
-    setCustomBooksLoading(true);
-    const q = query(
-      collection(db, "users", user.uid, "books"),
-      orderBy("createdAt", "desc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((docSnapshot) => {
-        const data = docSnapshot.data();
-        items.push({
-          id: docSnapshot.id,
-          title: data.title || "Untitled Book",
-          author: data.author || "Unknown Author",
-          desc: data.desc || "",
-          department: data.department || "MCA",
-          link: data.link || "",
-          fileUri: data.fileUri || "",
-          mimeType: data.mimeType || "",
-          createdAt: data.createdAt,
-        });
-      });
-      setCustomBooks(items);
-      setCustomBooksLoading(false);
-    }, (err) => {
-      console.error("Error fetching custom books:", err);
-      setCustomBooksLoading(false);
-    });
-    return () => unsubscribe();
-  }, [user]);
-
   const handleSelectHistoryItem = (item: HistoryItem) => {
-    if (item.fileUri && (item.fileUri.startsWith("book:") || item.fileUri.startsWith("link:") || customBooks.some(b => b.fileUri === item.fileUri))) {
+    if (item.fileUri && (item.fileUri.startsWith("book:") || item.fileUri.startsWith("link:"))) {
       setInputType("library");
     }
  else if (item.title && item.title.startsWith("scan-")) {
@@ -878,112 +829,7 @@ export default function App() {
 
   };
 
-  const handleAddBook = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user) {
-      setAddBookError("Please log in to add books.");
-      return;
-    }
 
-    if (!newBookTitle.trim() || !newBookAuthor.trim()) {
-      setAddBookError("Title and Author are required.");
-      return;
-    }
-
-
-    setIsSavingBook(true);
-    setAddBookError(null);
-
-    try {
-      let finalFileUri = "";
-      let finalMimeType = "";
-
-      if (newBookType === "file") {
-        if (!newBookFile) {
-          throw new Error("Please select a PDF file to upload.");
-        }
-
-        const formData = new FormData();
-        formData.append("file", newBookFile);
-
-        const res = await fetch("/api/upload-pdf", {
-          method: "POST",
-          body: formData,
-        });
-        const textResponse = await res.text();
-        let data;
-        try {
-          data = JSON.parse(textResponse.trim());
-        }
- catch (e) {
-          if (textResponse.trim().toLowerCase().startsWith("<!doctype html>")) { throw new Error("Server is temporarily unavailable (restarting). Please try again in a few seconds."); } throw new Error(`Server upload error: ${res.status}`);
-        }
-
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to upload book file.");
-        }
-
-        finalFileUri = data.fileUri;
-        finalMimeType = data.mimeType;
-      }
- else {
-        if (!newBookLink.trim()) {
-          throw new Error("Please enter a valid website link.");
-        }
-
-        if (!newBookLink.startsWith("http://") && !newBookLink.startsWith("https://")) {
-          throw new Error("Website link must start with http:// or https://");
-        }
-
-        finalFileUri = "link:" + newBookLink.trim();
-        finalMimeType = "text/html";
-      }
-
-
-      // Add to Firestore
-      await addDoc(collection(db, "users", user.uid, "books"), {
-        title: newBookTitle.trim(),
-        author: newBookAuthor.trim(),
-        desc: newBookDesc.trim(),
-        department: newBookDept,
-        fileUri: finalFileUri,
-        mimeType: finalMimeType,
-        link: newBookType === "link" ? newBookLink.trim() : "",
-        createdAt: serverTimestamp()
-      });
-
-      // Clear form & close
-      setNewBookTitle("");
-      setNewBookAuthor("");
-      setNewBookLink("");
-      setNewBookFile(null);
-      setNewBookDesc("");
-      setIsAddBookOpen(false);
-    }
- catch (err: any) {
-      console.error("Add book error:", err);
-      setAddBookError(err.message || "An unexpected error occurred while adding the book.");
-    }
- finally {
-      setIsSavingBook(false);
-    }
-
-  };
-
-  const handleDeleteBook = async (bookId: string) => {
-    if (!user) return;
-    if (confirm("Are you sure you want to delete this book from your library?")) {
-      try {
-        await deleteDoc(doc(db, "users", user.uid, "books", bookId));
-      }
- catch (err) {
-        console.error("Error deleting book:", err);
-        alert("Failed to delete book.");
-      }
-
-    }
-
-  };
 
   const generateNotes = async () => {
     if (!fileData) return;
@@ -2364,160 +2210,25 @@ export default function App() {
 
             {inputType === "library" && (
               <div className="space-y-4">
-                {/* Search & Add Book Row */}
-                <div className="flex gap-2 items-center">
-                  <div className="relative flex-1">
-                    <input
-                      type="text"
-                      placeholder="Search books..."
-                      value={searchQuery ?? ""}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full text-xs bg-[#FAF9F6] border border-[#D1D1C4] rounded-xl pl-8 pr-3 py-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all font-sans"
-                    />
-                    <span className="absolute left-2.5 top-2.5 text-[#8A8A7A]">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                      </svg>
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setIsAddBookOpen(!isAddBookOpen);
-                      setAddBookError(null);
-                    }
-}
-                    className="flex items-center gap-1.5 py-2 px-3 bg-[#5A5A40] text-white rounded-xl text-xs font-bold hover:bg-opacity-95 transition-all shadow-sm shrink-0"
-                  >
-                    {isAddBookOpen ? "Cancel" : "+ Add Book"}
-                  </button>
+                {/* Search Bar */}
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search books..."
+                    value={searchQuery ?? ""}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full text-xs bg-[#FAF9F6] border border-[#D1D1C4] rounded-xl pl-8 pr-3 py-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all font-sans"
+                  />
+                  <span className="absolute left-2.5 top-2.5 text-[#8A8A7A]">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                  </span>
                 </div>
-
-                {/* Add Custom Book Form Panel */}
-                {isAddBookOpen && (
-                  <form onSubmit={handleAddBook} className="bg-[#FAF9F6] p-4 rounded-xl border border-[#D1D1C4] space-y-3 relative text-left">
-                    <h3 className="text-xs font-bold text-[#3A3A2F] uppercase tracking-wider flex items-center gap-1.5">
-                      <BookOpen size={14} className="text-[#5A5A40]" /> Add Book to Library
-                    </h3>
-                    
-                    {addBookError && (
-                      <div className="p-2.5 bg-red-50 text-red-700 text-[11px] rounded-lg border border-red-200 flex items-center gap-1.5">
-                        <AlertCircle size={14} /> {addBookError}
-                      </div>)}
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Book Title*</label>
-                        <input
-                          type="text"
-                          required
-                          value={newBookTitle ?? ""}
-                          onChange={(e) => setNewBookTitle(e.target.value)}
-                          placeholder="e.g. Database Concepts"
-                          className="w-full text-xs bg-white border border-[#D1D1C4] rounded-lg p-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Author*</label>
-                        <input
-                          type="text"
-                          required
-                          value={newBookAuthor ?? ""}
-                          onChange={(e) => setNewBookAuthor(e.target.value)}
-                          placeholder="e.g. Silberschatz"
-                          className="w-full text-xs bg-white border border-[#D1D1C4] rounded-lg p-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Department*</label>
-                        <select
-                          value={newBookDept ?? ""}
-                          onChange={(e) => setNewBookDept(e.target.value)}
-                          className="w-full text-xs bg-white border border-[#D1D1C4] rounded-lg p-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all"
-                        >
-                          <option value="MCA">MCA</option>
-                          <option value="BCA">BCA</option>
-                          <option value="Engineering">Engineering</option>
-                          <option value="Pharmacy">Pharmacy</option>
-                          <option value="Commerce">Commerce</option>
-                          <option value="Science">Science</option>
-                          <option value="Arts">Arts</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Source Type</label>
-                        <div className="flex bg-[#E8E8E0] p-0.5 rounded-lg border border-[#D1D1C4]">
-                          <button
-                            type="button"
-                            onClick={() => setNewBookType("link")}
-                            className={`flex-1 py-1 text-[10px] font-bold rounded transition-all ${newBookType === "link" ? "bg-white text-[#3A3A2F] shadow-sm" : "text-[#8A8A7A] hover:text-[#5A5A40]"}`}
-                          >
-                            Website Link
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setNewBookType("file")}
-                            className={`flex-1 py-1 text-[10px] font-bold rounded transition-all ${newBookType === "file" ? "bg-white text-[#3A3A2F] shadow-sm" : "text-[#8A8A7A] hover:text-[#5A5A40]"}`}
-                          >
-                            PDF File
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {newBookType === "link" ? (
-                      <div>
-                        <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Website URL*</label>
-                        <input
-                          type="url"
-                          required={newBookType === "link"}
-                          value={newBookLink ?? ""}
-                          onChange={(e) => setNewBookLink(e.target.value)}
-                          placeholder="https://example.com/materials.html"
-                          className="w-full text-xs bg-white border border-[#D1D1C4] rounded-lg p-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all font-mono"
-                        />
-                        <span className="text-[9px] text-[#8A8A7A] mt-1 block">Our AI system will fetch and summarize web text in real-time.</span>
-                      </div>) : (
-                      <div>
-                        <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Upload PDF Document*</label>
-                        <input
-                          type="file"
-                          required={newBookType === "file"}
-                          accept="application/pdf"
-                          onChange={(e) => setNewBookFile(e.target.files?.[0] || null)}
-                          className="w-full text-xs text-[#3A3A2F]"
-                        />
-                      </div>)}
-
-                    <div>
-                      <label className="text-[10px] font-bold text-[#8A8A7A] block mb-1">Short Description / Syllabus Notes</label>
-                      <textarea
-                        value={newBookDesc ?? ""}
-                        onChange={(e) => setNewBookDesc(e.target.value)}
-                        placeholder="Topics covered, target semester, study outline..."
-                        rows={2}
-                        className="w-full text-xs bg-white border border-[#D1D1C4] rounded-lg p-2 text-[#3A3A2F] outline-none focus:border-[#5A5A40] transition-all resize-none"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={isSavingBook}
-                      className="w-full bg-[#5A5A40] hover:bg-opacity-95 disabled:bg-[#8A8A7A] text-white py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm"
-                    >
-                      {isSavingBook ? (
-                        <>
-                          <Loader2 size={13} className="animate-spin" /> Uploading & Processing...
-                        </>) : (
-                        "Save to Library")}
-                    </button>
-                  </form>)}
 
                 {/* Department Filters Tab List */}
                 <div className="flex gap-1 overflow-x-auto pb-1.5 scrollbar-none scroll-smooth">
-                  {["All", "MCA", "BCA", "Engineering", "Pharmacy", "Commerce", "Science", "Arts", "My Uploads"].map((dept) => {
+                  {["All", "MCA", "BCA", "Engineering", "Pharmacy", "Commerce", "Science", "Arts"].map((dept) => {
                     const isActive = selectedDept === dept;
                     return (
                       <button
@@ -2526,27 +2237,15 @@ export default function App() {
                         className={`px-3 py-1 text-[10px] font-bold rounded-full transition-all shrink-0 border ${isActive ? "bg-[#5A5A40] border-[#5A5A40] text-white" : "bg-[#FAF9F6] border-[#E0E0D5] text-[#6A6A5A] hover:bg-[#E8E8E0]"}`}
                       >
                         {dept}
-                      </button>);
+                      </button>
+                    );
                   })}
                 </div>
 
                 {/* Books Display Grid */}
                 <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1 scrollbar-thin">
-                  {customBooksLoading && (
-                    <div className="p-6 text-center text-xs text-[#8A8A7A] flex flex-col items-center justify-center gap-2">
-                      <Loader2 size={16} className="animate-spin text-[#5A5A40]" /> Loading Custom Library...
-                    </div>)}
-
-                  {!customBooksLoading && allLibraryBooks.filter(bk => {
-                    if (selectedDept !== "All") {
-                      if (selectedDept === "My Uploads") {
-                        if (bk.id.startsWith("book:")) return false;
-                      }
- else {
-                        if (bk.department !== selectedDept) return false;
-                      }
-
-                    }
+                  {allLibraryBooks.filter(bk => {
+                    if (selectedDept !== "All" && bk.department !== selectedDept) return false;
 
                     if (searchQuery.trim()) {
                       const q = searchQuery.toLowerCase();
@@ -2557,17 +2256,10 @@ export default function App() {
                   }).length === 0 ? (
                     <div className="p-6 text-center text-xs text-[#8A8A7A] bg-[#FAF9F6] rounded-xl border border-dashed border-[#D1D1C4]">
                       No books found in this category.
-                    </div>) : (
+                    </div>
+                  ) : (
                     allLibraryBooks.filter(bk => {
-                      if (selectedDept !== "All") {
-                        if (selectedDept === "My Uploads") {
-                          if (bk.id.startsWith("book:")) return false;
-                        }
- else {
-                          if (bk.department !== selectedDept) return false;
-                        }
-
-                      }
+                      if (selectedDept !== "All" && bk.department !== selectedDept) return false;
 
                       if (searchQuery.trim()) {
                         const q = searchQuery.toLowerCase();
@@ -2576,8 +2268,7 @@ export default function App() {
 
                       return true;
                     }).map((bk) => {
-                      const isSelected = fileData?.fileUri === bk.id || (bk.fileUri && fileData?.fileUri === bk.fileUri);
-                      const isCustom = !bk.id.startsWith("book:");
+                      const isSelected = fileData?.fileUri === bk.id || ((bk as any).fileUri && fileData?.fileUri === (bk as any).fileUri);
                       
                       // Department soft color tag
                       let tagColor = "bg-gray-100 text-gray-700 border-gray-200";
@@ -2592,7 +2283,6 @@ export default function App() {
                         default: tagColor = "bg-blue-50 text-blue-800 border-blue-200";
                       }
 
-
                       return (
                         <div
                           key={bk.id}
@@ -2603,14 +2293,6 @@ export default function App() {
                               <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${tagColor}`}>
                                 {bk.department}
                               </span>
-                              {isCustom && bk.link && (
-                                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full border border-teal-200 bg-teal-50 text-teal-800 flex items-center gap-0.5">
-                                  🔗 Web Link
-                                </span>)}
-                              {isCustom && !bk.link && (
-                                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-800 flex items-center gap-0.5">
-                                  📄 Custom Upload
-                                </span>)}
                             </div>
                             <h4 className="text-xs font-bold text-[#3A3A2F] mt-1 leading-snug line-clamp-2">
                               {bk.title}
@@ -2621,19 +2303,19 @@ export default function App() {
                             {bk.desc && (
                               <p className="text-[10px] text-[#6A6A5A] mt-1.5 leading-relaxed line-clamp-3 italic">
                                 "{bk.desc}"
-                              </p>)}
+                              </p>
+                            )}
                           </div>
 
                           <div className="flex gap-1.5 items-center mt-1">
                             <button
                               onClick={() => {
-                                setFileData({ fileUri: bk.fileUri || bk.id, mimeType: bk.mimeType || "text/plain" });
+                                setFileData({ fileUri: (bk as any).fileUri || bk.id, mimeType: (bk as any).mimeType || "text/plain" });
                                 setFile(new File([], `[Library Book] ${bk.title}`));
                                 setResultText("");
                                 setResultType("");
-                                                                setFlashcards([]);
-                              }
-}
+                                setFlashcards([]);
+                              }}
                               className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold transition-all text-center ${isSelected ? "bg-[#5A5A40] text-white shadow-sm" : "border border-[#5A5A40] text-[#5A5A40] hover:bg-[#FAF9F0]"}`}
                             >
                               {isSelected ? "📖 Selected for Study" : "📖 Study Book"}
@@ -2642,13 +2324,11 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => {
-                                // Create simulated or URL text blob download
                                 const textContent = `
 =========================================
 STUDY BOOK COMPANION: ${bk.title.toUpperCase()}
 Author: ${bk.author}
 Department: ${bk.department}
-Source: ${bk.link || 'Preset Library Book'}
 =========================================
 
 Description:
@@ -2665,39 +2345,20 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                                 a.click();
                                 document.body.removeChild(a);
                                 URL.revokeObjectURL(url);
-                              }
-}
+                              }}
                               className="py-1.5 px-2 border border-[#8A8A7A] text-[#8A8A7A] hover:text-[#5A5A40] hover:border-[#5A5A40] rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-0.5 shrink-0"
                               title="Download study companion text"
                             >
                               <Download size={11} />
                             </button>
-
-                            {isCustom && bk.link && (
-                              <a
-                                href={bk.link}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="py-1.5 px-2 border border-[#8A8A7A] text-[#8A8A7A] hover:text-[#5A5A40] hover:border-[#5A5A40] rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-0.5 shrink-0"
-                                title="Open original link"
-                              >
-                                <ExternalLink size={11} />
-                              </a>)}
-
-                            {isCustom && (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteBook(bk.id)}
-                                className="py-1.5 px-2 border border-red-200 text-red-500 hover:text-red-700 hover:border-red-400 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center shrink-0"
-                                title="Delete from library"
-                              >
-                                <Trash2 size={11} />
-                              </button>)}
                           </div>
-                        </div>);
-                    }))}
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
-              </div>)}
+              </div>
+            )}
 
             {inputType === "scan" && (
               <div className="space-y-3">

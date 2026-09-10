@@ -497,13 +497,14 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 1, initial
 
 async function generateContentWithFallback(ai: any, params: any): Promise<any> {
   const modelsToTry = [
-    "gemini-3.6-flash",
-    "gemini-3.6-flash",
-    "gemini-3.6-flash",
-    "gemini-3.6-flash",
-    "gemini-3.6-flash"
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash",
+    "gemini-1.5-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-pro"
   ];
-  const initialModel = params.model || "gemini-3.6-flash";
+  const initialModel = params.model || "gemini-3.5-flash-lite";
   const uniqueModels = Array.from(new Set([initialModel, ...modelsToTry]));
   
   let lastError: any = null;
@@ -605,7 +606,7 @@ app.post("/api/chat", async (req, res) => {
     });
 
     const response = await generateContentWithFallback(ai, {
-      model: "gemini-3.6-flash",
+      model: "gemini-3.5-flash-lite",
       contents: contents
     });
     return res.json({ result: response.text });
@@ -712,7 +713,7 @@ app.post("/api/generate-notes", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           maxOutputTokens: 8192,
@@ -777,7 +778,7 @@ app.post("/api/generate-assessment", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt)
       });
       return res.json({ result: response.text });
@@ -831,7 +832,7 @@ Ensure every diagram has 3 to 5 clear item nodes describing steps, layers, compo
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt)
       });
       const cleanText = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -938,7 +939,7 @@ app.post("/api/generate-flashcards", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1183,7 +1184,7 @@ app.post("/api/generate-question-bank", async (req, res) => {
     
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           maxOutputTokens: 8192,
@@ -1234,7 +1235,7 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1304,7 +1305,7 @@ app.post("/api/generate-video-explanation", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1392,7 +1393,7 @@ app.post("/api/generate-ppt", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",

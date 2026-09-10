@@ -3,7 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <title>Edusmart AI Portal</title>
+    <script>
+      try {
+        let _fetch = window.fetch;
+        Object.defineProperty(window, 'fetch', {
+          get: () => _fetch,
+          set: (val) => { _fetch = val; },
+          configurable: true,
+          enumerable: true
+        });
+      } catch (e) {
+        try {
+          Object.defineProperty(Window.prototype, 'fetch', {
+            get: function() { return this._fetch || window.fetch; },
+            set: function(val) { this._fetch = val; },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (err) {}
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
