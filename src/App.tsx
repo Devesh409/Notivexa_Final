@@ -3,7 +3,7 @@ import { SlidePreviewModal } from "./components/SlidePreviewModal";
 import { UniversityPaperEditor } from "./components/UniversityPaperEditor";
 import React, { useState, useRef, useEffect } from "react";
 import { motion } from "motion/react";
-import { BookOpen, GraduationCap, Upload, FileText, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity } from "lucide-react";
+import { BookOpen, GraduationCap, Upload, FileText, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -17,6 +17,8 @@ import { VideoExplainer, VideoData } from "./components/VideoExplainer";
 import { UserProfile } from "./components/UserProfile";
 import { AuthForm } from "./components/AuthForm";
 import { Chatbot } from "./components/Chatbot";
+import { LibraryPanel, type LibraryBook } from "./components/LibraryPanel";
+import { deleteSavedLibraryBook, getSavedLibraryBookFile, listSavedLibraryBooks, saveLibraryBook, type SavedLibraryBook } from "./components/libraryStorage";
 
 type Mode = "student";
 
@@ -76,6 +78,7 @@ interface HistoryItem {
   type: "notes" | "assessment" | "flashcards" | "lesson-plan" | "video" | string;
   questionBankType?: string;
   questionBankBloomLevel?: string;
+  notesVersion?: number;
   fileUri: string;
   mimeType: string;
   resultText: string;
@@ -289,6 +292,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [generatingType, setGeneratingType] = useState<"notes" | "assessment" | "flashcards" | "question-bank" | "lesson-plan" | "video" | "ppt" | "exam-paper" | "">("");
   const [resultText, setResultText] = useState("");
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [activeNav, setActiveNav] = useState<"materials" | "library" | "tools" | "learning">("materials");
+  const [isChatbotOpen, setIsChatbotOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [pptTheme, setPptTheme] = useState<"academic" | "professional" | "minimalist" | "pastel">("academic");
@@ -307,8 +317,7 @@ export default function App() {
       activities: string[];
     }[];
     fullMarkdownPlan: string;
-  }
- | null>(null);
+  } | null>(null);
   const [completedSessions, setCompletedSessions] = useState<Record<string, boolean>>({});
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -323,97 +332,128 @@ export default function App() {
   const [focusArea, setFocusArea] = useState("Algorithms, step-by-step processes, and diagrams in student style");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isSpeechPaused, setIsSpeechPaused] = useState(false);
-    const [questionBankType, setQuestionBankType] = useState("all");
-    const [examPaperType, setExamPaperType] = useState("paper-full");
-    const [universityMarks, setUniversityMarks] = useState<number>(60);
+  const [questionBankType, setQuestionBankType] = useState("all");
+  const [activeExamTool, setActiveExamTool] = useState<"question-bank" | "exam-paper">("question-bank");
+  const [examPaperType, setExamPaperType] = useState("paper-full");
+  const [universityMarks, setUniversityMarks] = useState<number>(60);
   const [questionBankBloomLevel, setQuestionBankBloomLevel] = useState("all");
-
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("eduSmart_darkMode") === "true";
-    }
-
-    return false;
-  });
-
-  useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add("dark");
-      localStorage.setItem("eduSmart_darkMode", "true");
-    }
- else {
-      document.documentElement.classList.remove("dark");
-      localStorage.setItem("eduSmart_darkMode", "false");
-    }
-
-  }, [isDarkMode]);
-
-
-
-  // High-Capacity Book Library and Live Camera Scanner State
-  const [inputType, setInputType] = useState<"upload" | "library" | "scan">("upload");
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
+  const [historyDeleteError, setHistoryDeleteError] = useState<string | null>(null);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => typeof window !== "undefined" && localStorage.getItem("eduSmart_darkMode") === "true");
+  const [inputType, setInputType] = useState<"upload" | "scan">("upload");
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  
   const notesRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  // Library UI state
   const [selectedDept, setSelectedDept] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [personalLibraryBooks, setPersonalLibraryBooks] = useState<SavedLibraryBook[]>([]);
+  const [busyLibraryBookId, setBusyLibraryBookId] = useState<string | null>(null);
+  const notesViewerRef = useRef<HTMLDivElement>(null);
 
   const defaultLibraryBooks = [
-    // Classical books for backwards compatibility
     { id: "book:gatsby", title: "The Great Gatsby", author: "F. Scott Fitzgerald", desc: "A detailed exploration of wealth, love, obsession, and the American Dream.", department: "Arts" },
     { id: "book:frankenstein", title: "Frankenstein", author: "Mary Shelley", desc: "A legendary sci-fi tale examining creation, scientific ambition, and isolation.", department: "Science" },
     { id: "book:sherlock_holmes", title: "The Adventures of Sherlock Holmes", author: "Arthur Conan Doyle", desc: "Classic detective mysteries showcasing brilliant deduction and case analysis.", department: "Arts" },
     { id: "book:alice_in_wonderland", title: "Alice's Adventures in Wonderland", author: "Lewis Carroll", desc: "A whimsical journey through nonsense, dreams, and linguistic puzzles.", department: "Arts" },
     { id: "book:pride_and_prejudice", title: "Pride & Prejudice", author: "Jane Austen", desc: "A brilliant romantic comedy about social status, pride, and assumptions.", department: "Arts" },
     { id: "book:macbeth", title: "Macbeth", author: "William Shakespeare", desc: "A masterpiece tragedy examining raw political ambition, guilt, and fate.", department: "Arts" },
-    
-    // MCA (Master of Computer Applications)
     { id: "book:distributed_systems", title: "Distributed Systems: Concepts and Design", author: "George Coulouris", desc: "Comprehensive coverage of distributed system architectures, peer-to-peer systems, middleware, consensus, and cloud algorithms.", department: "MCA" },
     { id: "book:advanced_db", title: "Advanced Database Management Systems", author: "Raghu Ramakrishnan", desc: "Deep dive into query optimization, transaction management, indexing, and NoSQL/distributed database technologies.", department: "MCA" },
-    
-    // BCA (Bachelor of Computer Applications)
     { id: "book:cpp_oop", title: "Programming in C++ and Object-Oriented Design", author: "Bjarne Stroustrup", desc: "Foundational principles of object-oriented programming, classes, inheritance, polymorphism, memory management, and C++ design.", department: "BCA" },
     { id: "book:computer_networks", title: "Computer Networks & Internet Protocols", author: "Andrew S. Tanenbaum", desc: "Detailed exploration of network layers, routing protocols, TCP/UDP, and application-layer services.", department: "BCA" },
-    
-    // Engineering
     { id: "book:artificial_intelligence", title: "Artificial Intelligence: A Modern Approach", author: "Stuart Russell & Peter Norvig", desc: "The definitive guide to rational agents, search, logic, machine learning, neural networks, and agent architectures.", department: "Engineering" },
     { id: "book:engineering_math", title: "Advanced Engineering Mathematics", author: "Erwin Kreyszig", desc: "Fourier analysis, partial differential equations, complex analysis, linear algebra, and numerical engineering methods.", department: "Engineering" },
     { id: "book:fluid_mechanics", title: "Fluid Mechanics & Thermodynamics", author: "Frank M. White", desc: "Fundamental principles of fluid properties, fluid statics, control volume analysis, pipe flow, drag, and lift.", department: "Engineering" },
-    
-    // Pharmacy
     { id: "book:medical_pharmacology", title: "Essentials of Medical Pharmacology", author: "K.D. Tripathi", desc: "Comprehensive drug actions, mechanisms, pharmacokinetics (ADME), clinical therapeutics, and toxicities.", department: "Pharmacy" },
     { id: "book:pharmaceutics", title: "Pharmaceutics: Formulations and Drug Delivery", author: "Michael E. Aulton", desc: "Dosage form design, biopharmaceutics, drug stability, physical pharmacy, and industrial manufacturing.", department: "Pharmacy" },
-    
-    // Commerce
-    { id: "book:corporate_finance", title: "Principles of Corporate Finance", author: "Richard A. Brealey & Stewart C. Myers", desc: "Valuation models, capital budgeting, risk management, capital structure, and financial decision-making.", department: "Commerce" },
+    { id: "book:corporate_finance", title: "Principles of Corporate Finance", author: "Richard A. Brealey & C. Myers", desc: "Valuation models, capital budgeting, risk management, capital structure, and financial decision-making.", department: "Commerce" },
     { id: "book:financial_accounting", title: "Advanced Financial Accounting", author: "Theodore E. Christensen", desc: "Consolidations, foreign currency transactions, partnerships, segment reporting, and reporting standards.", department: "Commerce" },
-    
-    // Science
     { id: "book:brief_history_time", title: "A Brief History of Time & Cosmology", author: "Stephen Hawking", desc: "A journey through space-time, black holes, the big bang, quantum mechanics, and the search for a unified physical theory.", department: "Science" },
     { id: "book:organic_chemistry", title: "Organic Chemistry: Structure and Reactivity", author: "Robert T. Morrison & Robert N. Boyd", desc: "Detailed chemical structures, reaction mechanisms (substitution, elimination), synthesis pathways, and spectroscopy.", department: "Science" },
-    
-    // Arts
     { id: "book:story_of_art", title: "The Story of Art & Visual History", author: "E.H. Gombrich", desc: "The classic survey of art history, from prehistoric cave paintings and classical eras to Renaissance, Modern, and contemporary arts.", department: "Arts" },
     { id: "book:history_western_philosophy", title: "A History of Western Philosophy", author: "Bertrand Russell", desc: "A comprehensive analysis of philosophical thought from the pre-Socratics to 20th-century analytical philosophy.", department: "Arts" }
   ];
+  const allLibraryBooks: LibraryBook[] = [...defaultLibraryBooks, ...personalLibraryBooks];
 
-  const allLibraryBooks = defaultLibraryBooks;
-  const libraryBooks = allLibraryBooks;
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("eduSmart_darkMode", "true");
+    } else {
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("eduSmart_darkMode", "false");
+    }
+  }, [isDarkMode]);
 
-  const getActiveBook = () => {
-    if (!fileData || !fileData.fileUri) return null;
-    return allLibraryBooks.find(b => b.id === fileData.fileUri || ((b as any).fileUri && (b as any).fileUri === fileData.fileUri));
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (authenticatedUser) => {
+      setUser(authenticatedUser);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    void listSavedLibraryBooks()
+      .then((books) => {
+        if (isMounted) setPersonalLibraryBooks(books);
+      })
+      .catch((storageError) => {
+        console.warn("Could not load the local book library:", storageError);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setCurrentPageIndex(0);
+  }, [resultText]);
+
+  useEffect(() => {
+    notesViewerRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [currentPageIndex]);
+
+  const resultPages = resultText
+    .split("---SET_SEPARATOR---")
+    .flatMap((setMarkdown) => setMarkdown.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i))
+    .filter((pageMarkdown) => pageMarkdown.trim().length > 0);
+
+  const seenActivityKeys = new Set<string>();
+  const uniqueHistoryItems = history.filter((item) => {
+    const activityKey = `${item.fileUri || item.id}|${item.type}|${item.title}`;
+    if (seenActivityKeys.has(activityKey)) return false;
+    seenActivityKeys.add(activityKey);
+    return true;
+  });
+  const savedNotesCount = uniqueHistoryItems.filter((item) => item.type === "notes").length;
+  const practiceSetsCount = uniqueHistoryItems.filter((item) => ["flashcards", "assessment", "question-bank", "exam-paper"].includes(item.type)).length;
+  const studySourcesCount = new Set(uniqueHistoryItems.map((item) => item.fileUri).filter(Boolean)).size;
+
+  const navigateToSection = (section: "materials" | "library" | "tools" | "learning") => {
+    setActiveNav(section);
+    if (section !== "learning") setIsSidebarOpen(true);
+    if (section === "materials") setInputType("upload");
+    const targetId = section === "library" ? "dashboard-library" : section === "tools" ? "learning-tools" : section === "learning" ? "learning-content" : "material-source";
+    requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const runQuickTool = (toolAction: () => void | Promise<void>) => {
+    if (!fileData) {
+      navigateToSection("materials");
+      return;
+    }
+    void toolAction();
   };
 
   const startCamera = async () => {
@@ -421,34 +461,22 @@ export default function App() {
     setIsCameraLoading(true);
     setCapturedPhoto(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
       setCameraStream(stream);
-      // Wait for React to render the video element and stream
       setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-
+        if (videoRef.current) videoRef.current.srcObject = stream;
       }, 100);
-    }
- catch (err: any) {
+    } catch (err) {
       console.error("Camera access error:", err);
       setCameraError("Could not access camera. Please verify camera permissions or try on a device with a webcam.");
-    }
- finally {
+    } finally {
       setIsCameraLoading(false);
     }
-
   };
 
   const stopCamera = () => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-      setCameraStream(null);
-    }
-
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    setCameraStream(null);
   };
 
   const capturePhoto = () => {
@@ -457,14 +485,11 @@ export default function App() {
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
-      setCapturedPhoto(dataUrl);
-      stopCamera();
-    }
-
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setCapturedPhoto(canvas.toDataURL("image/jpeg", 0.95));
+    stopCamera();
   };
 
   const confirmScan = async () => {
@@ -472,61 +497,41 @@ export default function App() {
     setLoading(true);
     setError(null);
     setIsScannerOpen(false);
-    
     try {
-      const resBlob = await fetch(capturedPhoto);
-      const blob = await resBlob.blob();
+      const response = await fetch(capturedPhoto);
+      const blob = await response.blob();
       const scannedFile = new File([blob], `scan-${Date.now()}.jpg`, { type: "image/jpeg" });
       setFile(scannedFile);
-      
       const formData = new FormData();
       formData.append("file", scannedFile);
-      
-      const uploadRes = await fetch("/api/upload-pdf", {
-        method: "POST",
-        body: formData,
-      });
+      const uploadRes = await fetch("/api/upload-pdf", { method: "POST", body: formData });
       const textResponse = await uploadRes.text();
       let data;
       try {
         data = JSON.parse(textResponse.trim());
+      } catch {
+        if (textResponse.trim().toLowerCase().startsWith("<!doctype html>")) {
+          throw new Error("Server is temporarily unavailable (restarting). Please try again in a few seconds.");
+        }
+        throw new Error(`Server error: ${textResponse.slice(0, 100)}`);
       }
- catch (e) {
-        if (textResponse.trim().toLowerCase().startsWith("<!doctype html>")) { throw new Error("Server is temporarily unavailable (restarting). Please try again in a few seconds."); } throw new Error(`Server error: ${textResponse.slice(0, 100)}`);
-      }
-
-      
-      if (!uploadRes.ok) {
-        throw new Error(data.error || "Failed to process scanned image");
-      }
-
-      
+      if (!uploadRes.ok) throw new Error(data.error || "Failed to process scanned image");
       setFileData({ fileUri: data.fileUri, mimeType: data.mimeType });
       setResultText("");
       setResultType("");
-            setFlashcards([]);
-    }
- catch (err: any) {
+      setFlashcards([]);
+    } catch (err) {
       handleFetchError(err);
-    }
- finally {
+    } finally {
       setLoading(false);
       setCapturedPhoto(null);
     }
-
   };
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
 
   useEffect(() => {
     if (!user) {
       setHistory([]);
+      setHistoryLoading(false);
       return;
     }
 
@@ -563,10 +568,7 @@ export default function App() {
   }, [user]);
 
   const handleSelectHistoryItem = (item: HistoryItem) => {
-    if (item.fileUri && (item.fileUri.startsWith("book:") || item.fileUri.startsWith("link:"))) {
-      setInputType("library");
-    }
- else if (item.title && item.title.startsWith("scan-")) {
+    if (item.title && item.title.startsWith("scan-")) {
       setInputType("scan");
     }
  else {
@@ -586,14 +588,206 @@ export default function App() {
 
   };
 
+  const handleStudyLibraryBook = async (book: LibraryBook) => {
+    setBusyLibraryBookId(book.id);
+    setLoading(true);
+    setError(null);
+    try {
+      let fileUri = book.fileUri || book.id;
+      let mimeType = book.mimeType || "text/plain";
+      let studyFile = new File([], `[Library Book] ${book.title}`);
+
+      if (book.storageType === "file") {
+        const savedFile = await getSavedLibraryBookFile(book.id);
+        if (!savedFile) throw new Error("This saved PDF is missing from this browser. Add it to your library again.");
+
+        const formData = new FormData();
+        formData.append("file", savedFile);
+        const response = await fetch("/api/upload-pdf", { method: "POST", body: formData });
+        const responseText = await response.text();
+        let data: { fileUri?: string; mimeType?: string; error?: string };
+        try {
+          data = JSON.parse(responseText.trim());
+        } catch {
+          throw new Error(responseText.trim().startsWith("<") ? "The study server is temporarily unavailable. Try again shortly." : "The study server returned an invalid response.");
+        }
+        if (!response.ok || !data.fileUri) throw new Error(data.error || "Could not prepare this PDF for study.");
+        fileUri = data.fileUri;
+        mimeType = data.mimeType || savedFile.type || "application/pdf";
+        studyFile = savedFile;
+      } else if (book.storageType === "link" && book.sourceUrl) {
+        fileUri = `link:${book.sourceUrl}`;
+      }
+
+      setFileData({ fileUri, mimeType });
+      setFile(studyFile);
+      setResultText("");
+      setResultType("");
+      setFlashcards([]);
+      setLessonPlan(null);
+      setCompletedSessions({});
+      setCurrentCardIndex(0);
+      setIsFlipped(false);
+      setVideoData(null);
+      setSlides([]);
+      navigateToSection("materials");
+    } catch (studyError) {
+      handleFetchError(studyError);
+    } finally {
+      setLoading(false);
+      setBusyLibraryBookId(null);
+    }
+  };
+
+  const handleAddBookLink = async (rawUrl: string, department: string) => {
+    let sourceUrl: URL;
+    try {
+      sourceUrl = new URL(rawUrl);
+    } catch {
+      throw new Error("Enter a valid book link.");
+    }
+    const hostname = sourceUrl.hostname.toLowerCase();
+    const googleBooksHost = /^books\.google\.(?:com|[a-z]{2,3}(?:\.[a-z]{2})?)$/.test(hostname) || hostname === "play.google.com";
+    const isPrivateIpv4 = (() => {
+      const address = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+      if (!address) return false;
+      const [first, second] = address.slice(1).map(Number);
+      return first === 0 || first === 10 || first === 127 || first >= 224
+        || (first === 169 && second === 254)
+        || (first === 172 && second >= 16 && second <= 31)
+        || (first === 192 && second === 168);
+    })();
+    const isLocalHost = hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local");
+    if (sourceUrl.protocol !== "https:" || sourceUrl.username || sourceUrl.password || !hostname.includes(".") || isLocalHost || isPrivateIpv4 || hostname.startsWith("[")) {
+      throw new Error("Enter a secure public book link, such as Google Books or a direct PDF URL.");
+    }
+
+    const volumeId = googleBooksHost
+      ? sourceUrl.searchParams.get("id")
+        || sourceUrl.pathname.match(/\/(?:edition|details)\/[^/]+\/([A-Za-z0-9_-]{6,})/)?.[1]
+        || ""
+      : "";
+    let volumeInfo: { title?: string; authors?: string[]; description?: string } = {};
+    if (volumeId) {
+      try {
+        const response = await fetch(`https://www.googleapis.com/books/v1/volumes/${encodeURIComponent(volumeId)}`);
+        if (response.ok) {
+          const data = await response.json();
+          volumeInfo = data.volumeInfo || {};
+        }
+      } catch {
+        // Keep the link usable when the metadata service is unavailable.
+      }
+    }
+
+    let fallbackTitle = googleBooksHost ? "Google Books item" : "Linked book";
+    try {
+      fallbackTitle = decodeURIComponent(sourceUrl.pathname.split("/").filter(Boolean).pop() || fallbackTitle);
+    } catch {
+      // Keep a generic title if the URL contains an invalid escape sequence.
+    }
+    fallbackTitle = fallbackTitle
+      .replace(/\+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    fallbackTitle = fallbackTitle.replace(/\.pdf$/i, "");
+    if (["books", "details", "edition"].includes(fallbackTitle.toLowerCase())) fallbackTitle = "Google Books item";
+    const isPdfLink = /\.pdf$/i.test(sourceUrl.pathname);
+    const book: SavedLibraryBook = {
+      id: `personal:${crypto.randomUUID()}`,
+      title: volumeInfo.title || fallbackTitle || (googleBooksHost ? "Google Books item" : "Linked book"),
+      author: volumeInfo.authors?.join(", ") || "Unknown author",
+      desc: volumeInfo.description?.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1000)
+        || (isPdfLink ? "PDF book saved from a web link." : "Book saved from a web link."),
+      department,
+      sourceUrl: sourceUrl.toString(),
+      fileUri: `link:${sourceUrl.toString()}`,
+      mimeType: "text/plain",
+      storageType: "link",
+      createdAt: Date.now(),
+    };
+    await saveLibraryBook(book);
+    setPersonalLibraryBooks((current) => [book, ...current]);
+  };
+
+  const handleAddLocalBook = async (fileToSave: File, department: string) => {
+    if (!fileToSave.name.toLowerCase().endsWith(".pdf") && fileToSave.type !== "application/pdf") {
+      throw new Error("Choose a PDF book. Other formats are not supported for study yet.");
+    }
+    const book: SavedLibraryBook = {
+      id: `personal:${crypto.randomUUID()}`,
+      title: fileToSave.name.replace(/\.pdf$/i, "") || fileToSave.name,
+      author: "Added from this device",
+      desc: "PDF saved in this browser's local library.",
+      department,
+      mimeType: fileToSave.type || "application/pdf",
+      storageType: "file",
+      fileName: fileToSave.name,
+      createdAt: Date.now(),
+    };
+    await saveLibraryBook(book, fileToSave);
+    setPersonalLibraryBooks((current) => [book, ...current]);
+  };
+
+  const handleRemoveLibraryBook = async (book: LibraryBook) => {
+    if (!book.storageType) return;
+    await deleteSavedLibraryBook(book.id);
+    setPersonalLibraryBooks((current) => current.filter((savedBook) => savedBook.id !== book.id));
+  };
+
+  const handleDownloadLibraryBook = async (book: LibraryBook) => {
+    if (book.storageType === "file") {
+      const savedFile = await getSavedLibraryBookFile(book.id);
+      if (!savedFile) {
+        setError("This PDF could not be found in this browser's local storage.");
+        return;
+      }
+      const fileUrl = URL.createObjectURL(savedFile);
+      const anchor = document.createElement("a");
+      anchor.href = fileUrl;
+      anchor.download = book.fileName || savedFile.name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      window.setTimeout(() => URL.revokeObjectURL(fileUrl), 1000);
+      return;
+    }
+
+    const textContent = `STUDY BOOK COMPANION: ${book.title.toUpperCase()}
+Author: ${book.author}
+Department: ${book.department}
+
+Description:
+${book.desc || "No description available."}
+
+${book.sourceUrl ? `Book link: ${book.sourceUrl}\n\n` : ""}
+
+This study companion can be uploaded to the study panel to generate notes, assessments, presentations, lesson plans, and study guides.
+`;
+    const blob = new Blob([textContent], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${book.title.replace(/[^a-zA-Z0-9]/g, "_")}_Companion.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
   const handleDeleteHistoryItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!user) return;
+    setDeletingHistoryId(id);
+    setHistoryDeleteError(null);
     try {
       await deleteDoc(doc(db, "users", user.uid, "documents", id));
     }
  catch (err) {
       console.error("Error deleting document from history:", err);
+      setHistoryDeleteError("Could not remove this study activity. Please try again.");
+    } finally {
+      setDeletingHistoryId(null);
     }
 
   };
@@ -688,14 +882,11 @@ export default function App() {
   if (!user) {
     return (
       <div className={`flex min-h-screen items-center justify-center font-sans transition-colors relative overflow-hidden ${isDarkMode ? "bg-[#131311] text-[#E0E0D5]" : "bg-[#FDFDFB] text-[#2D2D2A]"}`}>
-        
-        {/* Background Ambient Glows */}
-        <div className={`absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full blur-[120px] pointer-events-none ${isDarkMode ? "bg-sky-900/20" : "bg-sky-200/40"}`}></div>
-        <div className={`absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full blur-[120px] pointer-events-none ${isDarkMode ? "bg-indigo-900/20" : "bg-indigo-200/40"}`}></div>
-        <div className={`absolute top-[30%] left-[50%] w-[40%] h-[40%] rounded-full blur-[100px] pointer-events-none ${isDarkMode ? "bg-violet-900/15" : "bg-violet-200/30"}`}></div>
+        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=2400&q=90')] bg-cover bg-center" />
+        <div className={`absolute inset-0 ${isDarkMode ? "bg-gradient-to-br from-[#111827]/75 via-[#172554]/65 to-[#131311]/80" : "bg-gradient-to-br from-slate-900/35 via-sky-950/25 to-slate-900/45"}`} />
 
         <div className={`p-10 md:p-12 rounded-[32px] border text-center max-w-md w-full relative z-10 transition-colors backdrop-blur-xl ${
-          isDarkMode ? "bg-[#22221F]/80 border-[#383832] shadow-[0_8px_32px_rgba(0,0,0,0.5)]" : "bg-white/70 border-white/60 shadow-[0_8px_32px_rgba(90,90,64,0.08)]"
+          isDarkMode ? "bg-[#22221F]/90 border-[#383832] shadow-[0_16px_48px_rgba(0,0,0,0.42)]" : "bg-white/90 border-white/75 shadow-[0_16px_48px_rgba(15,23,42,0.2)]"
         }
 `}>
           <button
@@ -769,6 +960,7 @@ export default function App() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
     const selectedFile = e.target.files[0];
+    e.currentTarget.value = "";
     setFile(selectedFile);
     setLoading(true);
     setError(null);
@@ -839,7 +1031,7 @@ export default function App() {
     try {
       // Client-side cache check to prevent double API calls & save quota
       const cached = history.find(
-        (item) => item.fileUri === fileData.fileUri && item.type === "notes");
+        (item) => item.fileUri === fileData.fileUri && item.type === "notes" && item.notesVersion === 3);
       if (cached) {
         setResultText(cached.resultText || "");
         setResultType("notes");
@@ -880,6 +1072,7 @@ export default function App() {
         await addDoc(collection(db, "users", user.uid, "documents"), {
           title: file ? file.name : "Study Notes",
           type: "notes",
+          notesVersion: data.notesVersion ?? 3,
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
           resultText: data.result || "",
@@ -1682,6 +1875,45 @@ export default function App() {
       setExportProgress(30);
       setExportStatus("Distributing page contents...");
       
+      const createPageForContent = () => {
+        currentPage = document.createElement("div");
+        currentPage.className = pageClass;
+        Object.assign(currentPage.style, {
+          width: "794px",
+          minHeight: "1123px",
+          maxHeight: "1123px",
+          padding: isStudent ? "60px 40px 60px 80px" : "60px 60px 60px 60px",
+          boxSizing: "border-box",
+          position: "relative",
+          overflow: "hidden",
+          backgroundColor: isStudent ? "#FDFDFB" : "#ffffff",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+        });
+
+        if (isStudent) {
+          currentPage.style.backgroundImage = pageStyle === 'ruled'
+            ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)'
+            : pageStyle === 'box'
+              ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px), repeating-linear-gradient(90deg, transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)'
+              : 'none';
+          currentPage.style.backgroundAttachment = 'local';
+          currentPage.style.lineHeight = '32px';
+        }
+
+        addDecorations(currentPage);
+
+        currentContentWrapper = document.createElement("div");
+        currentContentWrapper.className = isStudent ? "pl-8 block relative z-10" : "block relative z-10";
+        currentContentWrapper.style.maxWidth = "100%";
+        currentContentWrapper.style.boxSizing = "border-box";
+        currentPage.appendChild(currentContentWrapper);
+
+        tempWorkspace.appendChild(currentPage);
+        pages.push(currentPage);
+      };
+
       // We will iterate and place child nodes on pages
       for (const child of elementsToPaginate) {
         // Skip some container wrappers if they are empty
@@ -1689,117 +1921,41 @@ export default function App() {
           continue;
         }
 
-        
         const tagName = child.tagName?.toLowerCase() || '';
         const hasPageBreakClass = child.classList?.contains('page-break-before') || child.querySelector?.('.page-break-before') !== null;
-        // Check if this child is a primary section header (h1 or h2) or contains one
         const isHighLevelHeading = tagName === 'h1' || child.querySelector?.('h1') !== null;
-        
-        // Force page break proactively if a major heading/section or custom break class is met, but only if we already have content on the current page
         const shouldForcePageBreak = (isHighLevelHeading || hasPageBreakClass) && currentContentWrapper.children.length > 0;
-        
-        if (shouldForcePageBreak) {
-          currentPage = document.createElement("div");
-          currentPage.className = pageClass;
-          Object.assign(currentPage.style, {
-            width: "794px",
-            minHeight: "1123px",
-            maxHeight: "1123px",
-            padding: isStudent ? "60px 40px 60px 80px" : "60px 60px 60px 60px",
-            boxSizing: "border-box",
-            position: "relative",
-            overflow: "hidden",
-            backgroundColor: isStudent ? "#FDFDFB" : "#ffffff",
-            display: "flex",
-            flexDirection: "column",
-            gap: "16px",
-          });
-          
-          if (isStudent) {
-            currentPage.style.backgroundImage = pageStyle === 'ruled' 
-              ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
-              : pageStyle === 'box' 
-                ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px), repeating-linear-gradient(90deg, transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)'
-                : 'none';
-            currentPage.style.backgroundAttachment = 'local';
-            currentPage.style.lineHeight = '32px';
-          }
 
-          
-          addDecorations(currentPage);
-          
-          currentContentWrapper = document.createElement("div");
-          currentContentWrapper.className = isStudent ? "pl-8 block relative z-10" : "block relative z-10";
-          currentContentWrapper.style.maxWidth = "100%";
-          currentContentWrapper.style.boxSizing = "border-box";
-          currentPage.appendChild(currentContentWrapper);
-          
-          tempWorkspace.appendChild(currentPage);
-          pages.push(currentPage);
+        if (shouldForcePageBreak) {
+          createPageForContent();
         }
 
-        
         const clonedChild = child.cloneNode(true) as HTMLElement;
-        
-        // Ensure child contents are sized properly
         const childElements = clonedChild.querySelectorAll('pre, table, svg, img');
         childElements.forEach(el => {
           (el as HTMLElement).style.maxWidth = '100%';
           (el as HTMLElement).style.boxSizing = 'border-box';
         });
-        
-        currentContentWrapper.appendChild(clonedChild);
-        
-        // Measure height of content in the wrapper
-        const currentHeight = currentContentWrapper.scrollHeight;
-        const maxHeightAllowed = 940; // leaving margin for top/bottom padding
-        
-        if (currentHeight > maxHeightAllowed && currentContentWrapper.children.length > 1) {
-          // Doesn't fit on this page, remove it and start a new page
-          currentContentWrapper.removeChild(clonedChild);
-          
-          currentPage = document.createElement("div");
-          currentPage.className = pageClass;
-          Object.assign(currentPage.style, {
-            width: "794px",
-            minHeight: "1123px",
-            maxHeight: "1123px",
-            padding: isStudent ? "60px 40px 60px 80px" : "60px 60px 60px 60px",
-            boxSizing: "border-box",
-            position: "relative",
-            overflow: "hidden",
-            backgroundColor: isStudent ? "#FDFDFB" : "#ffffff",
-            display: "flex",
-            flexDirection: "column",
-            gap: "16px",
-          });
-          
-          if (isStudent) {
-            currentPage.style.backgroundImage = pageStyle === 'ruled' 
-              ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
-              : pageStyle === 'box' 
-                ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px), repeating-linear-gradient(90deg, transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)'
-                : 'none';
-            currentPage.style.backgroundAttachment = 'local';
-            currentPage.style.lineHeight = '32px';
-          }
 
-          
-          addDecorations(currentPage);
-          
-          currentContentWrapper = document.createElement("div");
-          currentContentWrapper.className = isStudent ? "pl-8 block relative z-10" : "block relative z-10";
-          currentContentWrapper.style.maxWidth = "100%";
-          currentContentWrapper.style.boxSizing = "border-box";
-          currentPage.appendChild(currentContentWrapper);
-          
-          tempWorkspace.appendChild(currentPage);
-          pages.push(currentPage);
-          
-          // Add to the new page
-          currentContentWrapper.appendChild(clonedChild);
+        const estimatedHeight = clonedChild.scrollHeight || clonedChild.offsetHeight || 0;
+        const maxHeightAllowed = 940;
+
+        const shouldSplitBeforeAppend =
+          currentContentWrapper.children.length > 0 &&
+          currentContentWrapper.scrollHeight + estimatedHeight > maxHeightAllowed;
+
+        if (shouldSplitBeforeAppend) {
+          createPageForContent();
         }
 
+        currentContentWrapper.appendChild(clonedChild);
+
+        const currentHeight = currentContentWrapper.scrollHeight;
+        if (currentHeight > maxHeightAllowed && currentContentWrapper.children.length > 1) {
+          currentContentWrapper.removeChild(clonedChild);
+          createPageForContent();
+          currentContentWrapper.appendChild(clonedChild);
+        }
       }
 
 
@@ -2077,43 +2233,204 @@ export default function App() {
 
 
   return (
-    <div className={`flex h-screen font-sans transition-colors duration-300 ${isDarkMode ? "bg-[#131311] text-[#E0E0D5] dark" : "bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 text-slate-800"}`}>
-      
-      {/* Sidebar (Streamlit style) */}
-      <div className={`w-72 border-r flex flex-col h-full z-10 transition-colors duration-300 ${
-        isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5] shadow-[0_4px_20px_rgba(0,0,0,0.3)]" : "bg-white/95 backdrop-blur-md border-slate-200/80 text-slate-800 shadow-[0_4px_25px_rgba(15,23,42,0.06)]"
-      }
-`}>
-        
-        {/* Fixed Header */}
-        <div className={`p-6 pb-4 border-b shrink-0 flex items-center justify-between transition-colors ${isDarkMode ? "border-[#383832]" : "border-slate-200/80"}`}>
-          <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl transition-all ${isDarkMode ? "bg-[#2D2D2A] text-[#C2C2B0]" : "bg-gradient-to-tr from-sky-500 via-indigo-600 to-violet-600 text-white shadow-md shadow-sky-500/25"}`}>
-              <BookOpen size={22} />
-            </div>
-            <div>
-              <h1 className={`text-xl font-bold font-serif transition-colors ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
-                Notivexa <span className={`italic font-extrabold ${isDarkMode ? "text-[#C2C2B0]" : "bg-gradient-to-r from-sky-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent"}`}>AI</span>
-              </h1>
-            </div>
+    <div className={`relative isolate grid h-screen ${isSidebarOpen ? "grid-cols-[18rem_minmax(0,1fr)]" : "grid-cols-1"} grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden p-3 font-sans transition-colors duration-300 ${isDarkMode ? "bg-[#131311] text-[#E0E0D5] dark" : "bg-gradient-to-br from-[#dcebf1] via-[#eaf1f7] to-[#e5eaf4] text-slate-800"}`}>
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+        <div
+          className="absolute inset-0"
+          style={{
+            background: isDarkMode
+              ? "radial-gradient(ellipse at 82% 8%, rgba(99,102,241,.18), transparent 34%), radial-gradient(ellipse at 14% 18%, rgba(56,189,248,.08), transparent 32%), linear-gradient(135deg, #171b2b 0%, #192132 54%, #211d35 100%)"
+              : "radial-gradient(ellipse at 82% 8%, rgba(147,197,253,.5), transparent 34%), radial-gradient(ellipse at 14% 14%, rgba(255,255,255,.96), transparent 38%), linear-gradient(135deg, #fbfdff 0%, #eef7ff 54%, #f2f0ff 100%)",
+          }}
+        />
+        <svg
+          className={`absolute inset-0 h-full w-full ${isDarkMode ? "opacity-30" : "opacity-80"}`}
+          viewBox="0 0 1600 900"
+          preserveAspectRatio="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <defs>
+            <linearGradient id="app-bg-blue-wave" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#7dd3fc" stopOpacity=".42" />
+              <stop offset="100%" stopColor="#60a5fa" stopOpacity=".08" />
+            </linearGradient>
+            <linearGradient id="app-bg-violet-wave" x1="1" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#c4b5fd" stopOpacity=".36" />
+              <stop offset="100%" stopColor="#a5b4fc" stopOpacity=".04" />
+            </linearGradient>
+          </defs>
+          <path d="M0 662C155 586 276 627 423 706C573 787 717 814 873 753C1029 692 1150 641 1291 687C1405 724 1507 651 1600 584V900H0V662Z" fill="url(#app-bg-blue-wave)" />
+          <path d="M0 780C159 704 296 738 440 792C601 852 768 863 929 803C1092 742 1219 715 1366 768C1454 800 1533 778 1600 739V900H0V780Z" fill="#fff" fillOpacity=".46" />
+          <path d="M1600 0H1510C1444 80 1385 150 1318 197C1381 238 1451 240 1518 207C1550 191 1578 170 1600 146V0Z" fill="url(#app-bg-violet-wave)" />
+          <path d="M0 708C168 635 290 665 438 739C589 815 726 829 884 772C1039 716 1151 672 1291 711C1414 747 1511 680 1600 621" fill="none" stroke="#fff" strokeWidth="3" strokeOpacity=".46" vectorEffect="non-scaling-stroke" />
+        </svg>
+      </div>
+      <header className={`col-span-full relative z-30 flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-4 py-3 backdrop-blur-md ${isDarkMode ? "border-[#383832] bg-[#22221F]/95 shadow-[0_8px_28px_rgba(0,0,0,0.25)]" : "border-white/70 bg-white/90 shadow-[0_8px_28px_rgba(15,23,42,0.08)]"}`}>
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen((open) => !open)}
+            aria-label={isSidebarOpen ? "Collapse study panel" : "Expand study panel"}
+            aria-expanded={isSidebarOpen}
+            title={isSidebarOpen ? "Collapse study panel" : "Expand study panel"}
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors ${isDarkMode ? "border-[#383832] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+          >
+            <Menu size={19} />
+          </button>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 text-white shadow-sm">
+            <GraduationCap size={21} />
           </div>
-
+          <div className="hidden min-w-0 sm:block">
+            <p className={`text-[10px] font-bold uppercase tracking-[0.16em] ${isDarkMode ? "text-sky-300" : "text-sky-700"}`}>Notivexa Learning Hub</p>
+            <p className={`truncate text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Study workspace</p>
+          </div>
+        </div>
+        <nav aria-label="Education navigation" className="order-3 flex w-full min-w-0 items-center gap-1 overflow-x-auto sm:order-2 sm:w-auto sm:flex-1 sm:justify-center">
+          <button
+            type="button"
+            onClick={() => navigateToSection("materials")}
+            className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+          >
+            <House size={15} />
+            <span>Home</span>
+          </button>
+          {([
+            { id: "materials", label: "Study Materials", icon: Upload },
+            { id: "library", label: "E-Library", icon: BookOpen },
+            { id: "tools", label: "AI Study Tools", icon: Sparkles },
+            { id: "learning", label: "My Learning", icon: GraduationCap },
+          ] as const).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => navigateToSection(id)}
+              aria-current={activeNav === id ? "page" : undefined}
+              className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${
+                activeNav === id
+                  ? "bg-sky-700 text-white shadow-sm"
+                  : isDarkMode
+                    ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white"
+                    : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"
+              }`}
+            >
+              <Icon size={15} />
+              <span>{label}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setShowAbout(true)}
+            className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+          >
+            <Info size={15} />
+            <span>About Us</span>
+          </button>
+          <a
+            href="mailto:support@notivexa.com?subject=Notivexa%20AI%20Support"
+            className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+          >
+            <Mail size={15} />
+            <span>support@notivexa.com</span>
+          </a>
+        </nav>
+        <div className="order-2 ml-auto flex shrink-0 items-center gap-1 sm:order-3">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowNotifications((show) => !show)}
+              aria-label="Notifications and recent study activity"
+              aria-expanded={showNotifications}
+              title="Notifications"
+              className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            >
+              <Bell size={17} />
+            </button>
+            {showNotifications && (
+              <div className={`absolute right-0 top-12 z-50 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border shadow-xl ${isDarkMode ? "border-[#383832] bg-[#22221F]" : "border-slate-200 bg-white"}`}>
+                <div className={`border-b px-4 py-3 ${isDarkMode ? "border-[#383832]" : "border-slate-100"}`}>
+                  <p className={`text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Recent study activity</p>
+                </div>
+                {historyDeleteError && (
+                  <p role="alert" className="px-4 pt-3 text-xs text-red-600">{historyDeleteError}</p>
+                )}
+                {historyLoading ? (
+                  <p className={`px-4 py-5 text-sm ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Loading activity…</p>
+                ) : history.length === 0 ? (
+                  <p className={`px-4 py-5 text-sm ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>No study activity yet.</p>
+                ) : (
+                  <div className="max-h-80 overflow-y-auto py-1">
+                    {history.slice(0, 5).map((item) => (
+                      <div key={item.id} className={`flex items-start gap-2 px-3 py-2 ${isDarkMode ? "hover:bg-[#2D2D2A]" : "hover:bg-sky-50"}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectHistoryItem(item);
+                            setShowNotifications(false);
+                            navigateToSection("learning");
+                          }}
+                          className="flex min-w-0 flex-1 items-start gap-3 py-1 text-left"
+                        >
+                          <FileText size={16} className="mt-0.5 shrink-0 text-sky-600" />
+                          <span className="min-w-0">
+                            <span className={`block truncate text-sm font-medium ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-700"}`}>{item.title}</span>
+                            <span className={`mt-0.5 block text-[11px] capitalize ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>{item.type.replaceAll("-", " ")}</span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => void handleDeleteHistoryItem(e, item.id)}
+                          disabled={deletingHistoryId !== null}
+                          aria-label={`Delete ${item.title} from study history`}
+                          title="Delete from history"
+                          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isDarkMode ? "text-[#A1A194] hover:bg-red-950/40 hover:text-red-300" : "text-slate-400 hover:bg-red-50 hover:text-red-600"}`}
+                        >
+                          {deletingHistoryId === item.id ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => { setShowSettings(true); setShowNotifications(false); }}
+            aria-label="Settings"
+            title="Settings"
+            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+          >
+            <Settings size={17} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowAbout(true)}
+            aria-label="About Notivexa AI"
+            title="About"
+            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+          >
+            <Info size={17} />
+          </button>
           <button
             onClick={() => setIsDarkMode(!isDarkMode)}
             title={isDarkMode ? "Switch to Daylight Mode" : "Switch to Late-Night Study Dark Mode"}
-            className={`p-2.5 rounded-full border transition-all flex items-center justify-center ${
-              isDarkMode 
-                ? "bg-[#2D2D2A] border-[#4A4A3F] text-[#FACC15] hover:bg-[#383832] shadow-sm" 
-                : "bg-white border-slate-200 text-amber-600 hover:bg-slate-50 shadow-xs"
-            }
-`}
+            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A] text-[#FACC15] hover:bg-[#383832]" : "border-slate-200 bg-white text-amber-600 hover:bg-slate-50"}`}
           >
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
+          <UserProfile user={user} isDarkMode={isDarkMode} onSignOut={handleSignOut} />
         </div>
+      </header>
 
+      {/* Sidebar (Streamlit style) */}
+      {isSidebarOpen && (
+      <div id="study-sidebar" className={`w-72 border-r flex flex-col h-full rounded-[24px] overflow-hidden z-10 transition-colors duration-300 ${
+        isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5] shadow-[0_8px_30px_rgba(0,0,0,0.32)]" : "bg-gradient-to-br from-white/92 via-sky-50/88 to-indigo-50/82 backdrop-blur-xl border-sky-100/80 text-slate-800 shadow-[0_10px_28px_rgba(38,73,112,0.12)]"
+      }
+`}>
+        
         {/* Scrollable middle container */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 min-h-0 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 custom-scrollbar">
           
           {/* Late-Night Study Mode Quick Switch */}
           <div className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-2 ${
@@ -2150,7 +2467,7 @@ export default function App() {
           </div>
 
           {/* Study Material Source */}
-          <div>
+          <div id="material-source" className="scroll-mt-6">
             <label className="text-xs font-semibold text-[#8A8A7A] uppercase tracking-widest mb-3 block">
               Study Material Source
             </label>
@@ -2170,17 +2487,6 @@ export default function App() {
               </button>
               <button
                 onClick={() => {
-                  setInputType("library");
-                  setFile(null);
-                  setFileData(null);
-                }
-}
-                className={`flex-1 py-2 px-1 rounded-full text-[11px] font-bold transition-all flex items-center justify-center gap-1 ${inputType === "library" ? "bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-md shadow-sky-500/20" : isDarkMode ? "text-[#A1A194] hover:text-[#E0E0D5]" : "text-slate-600 hover:text-slate-900"}`}
-              >
-                <BookOpen size={12} /> E-Library
-              </button>
-              <button
-                onClick={() => {
                   setInputType("scan");
                   setFile(null);
                   setFileData(null);
@@ -2194,7 +2500,8 @@ export default function App() {
 
             {/* Tab Contents */}
             {inputType === "upload" && (
-              <label className={`border-2 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-colors group block ${
+              <div className="flex items-stretch gap-2">
+              <label className={`min-w-0 flex-1 border-2 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-colors group ${
                 isDarkMode 
                   ? "border-[#4A4A3F] bg-[#22221F] hover:bg-[#2A2A26]" 
                   : "border-[#D1D1C4] bg-[#FAF9F6] hover:bg-[#F0F0E8]"
@@ -2206,9 +2513,25 @@ export default function App() {
                 <span className={`text-xs font-semibold ${isDarkMode ? "text-[#E0E0D5]" : "text-[#3A3A2F]"}`}>Choose E-Book or Scan</span>
                 <span className="text-[10px] text-[#8A8A7A] mt-1 truncate max-w-[180px]">{file ? file.name : "PDF, JPEG, or PNG (Limit 50MB)"}</span>
                 <input type="file" accept="application/pdf,image/*" className="hidden" onChange={handleUpload} />
-              </label>)}
+              </label>
+              {file && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFile(null);
+                    setFileData(null);
+                  }}
+                  disabled={loading}
+                  aria-label="Remove uploaded file"
+                  title="Remove uploaded file"
+                  className={`flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832] hover:text-red-300" : "border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-700"}`}
+                >
+                  <Trash2 size={16} />
+                </button>
+              )}
+              </div>)}
 
-            {inputType === "library" && (
+            {false && (
               <div className="space-y-4">
                 {/* Search Bar */}
                 <div className="relative">
@@ -2391,21 +2714,8 @@ This study companion has been successfully downloaded from your Notivexa AI Port
 
 
 
-          {/* Study Focus */}
-          <div>
-            <label className="text-xs font-semibold text-[#8A8A7A] uppercase tracking-widest mb-3 block">
-              Study Focus / Custom Prompt
-            </label>
-            <textarea
-              value={focusArea ?? ""}
-              onChange={(e) => setFocusArea(e.target.value)}
-              placeholder="e.g. Algorithms, step-by-step processes, and diagrams in student style"
-              className="w-full text-xs bg-[#FAF9F6] border border-[#D1D1C4] rounded-xl p-3 text-[#3A3A2F] outline-none focus:border-[#5A5A40] focus:ring-1 focus:ring-[#5A5A40] transition-all resize-none h-20 font-sans"
-            />
-          </div>
-
           {/* Actions */}
-          <div>
+          <div id="learning-tools" className="scroll-mt-6">
             <label className="text-xs font-semibold text-[#8A8A7A] uppercase tracking-widest mb-3 block">
               Actions
             </label>
@@ -2438,7 +2748,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                     {loading && generatingType === "flashcards" ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />}
                     Generate Flashcards
                   </button>
-                  <div className={`p-4 rounded-2xl space-y-3.5 shadow-sm mt-3 border transition-colors ${isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-gradient-to-br from-white via-emerald-50/60 to-teal-50/40 border-emerald-200/90 shadow-emerald-500/5"}`}>
+                  <div className={`p-3 rounded-2xl space-y-2.5 shadow-sm mt-2 border transition-colors ${isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-gradient-to-br from-white via-emerald-50/60 to-teal-50/40 border-emerald-200/90 shadow-emerald-500/5"}`}>
                     <div className="flex items-center justify-between">
                       <div className={`flex items-center gap-2 ${isDarkMode ? "text-[#C2C2B0]" : "text-[#5A5A40]"}`}>
                         <GraduationCap size={18} className="text-[#059669]" />
@@ -2448,15 +2758,34 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       </div>
                     </div>
                     
-                                        <div className="space-y-3">
-                      <div className="p-3 rounded-2xl border border-[#D1D1C4] dark:border-[#383832] space-y-3">
+                                        <div className="space-y-2">
+                        <div role="group" aria-label="Choose assessment tool" className={`grid grid-cols-2 rounded-xl p-1 ${isDarkMode ? "bg-[#22221F]" : "bg-white/80"}`}>
+                          <button
+                            type="button"
+                            onClick={() => setActiveExamTool("question-bank")}
+                            aria-pressed={activeExamTool === "question-bank"}
+                            className={`rounded-lg px-2 py-2 text-[11px] font-semibold transition-colors ${activeExamTool === "question-bank" ? "bg-emerald-600 text-white shadow-sm" : isDarkMode ? "text-[#A1A194] hover:text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                          >
+                            Question Bank
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveExamTool("exam-paper")}
+                            aria-pressed={activeExamTool === "exam-paper"}
+                            className={`rounded-lg px-2 py-2 text-[11px] font-semibold transition-colors ${activeExamTool === "exam-paper" ? "bg-blue-600 text-white shadow-sm" : isDarkMode ? "text-[#A1A194] hover:text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                          >
+                            Exam Paper
+                          </button>
+                        </div>
+                        {activeExamTool === "question-bank" && (
+                      <div className="p-2.5 rounded-xl border border-[#D1D1C4] dark:border-[#383832] space-y-2">
                         <label className={`block text-xs font-semibold ${isDarkMode ? "text-[#A1A194]" : "text-[#8A8A7A]"}`}>
                           Question Bank Generator
                         </label>
                         <select 
                           value={questionBankType} 
                           onChange={(e) => setQuestionBankType(e.target.value)}
-                          className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-[#059669]/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
+                          className={`w-full px-2.5 py-2 rounded-xl border text-xs focus:ring-2 focus:ring-[#059669]/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
                         >
                           <option value="all">All Types (50+ each)</option>
                           <option value="mcq">Multiple Choice (50+ MCQs)</option>
@@ -2466,21 +2795,22 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                         <button
                           onClick={generateQuestionBank}
                           disabled={!fileData || loading}
-                          className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-2.5 px-4 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
+                          className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
                         >
                           {loading && generatingType === "question-bank" ? <Loader2 size={14} className="animate-spin" /> : <GraduationCap size={14} />}
                           Generate Question Bank
                         </button>
                       </div>
-
-                      <div className="p-3 rounded-2xl border border-[#D1D1C4] dark:border-[#383832] space-y-3 bg-gradient-to-br from-blue-50/30 to-indigo-50/30 dark:from-blue-900/10 dark:to-indigo-900/10">
+                        )}
+                        {activeExamTool === "exam-paper" && (
+                      <div className="p-2.5 rounded-xl border border-[#D1D1C4] dark:border-[#383832] space-y-2 bg-gradient-to-br from-blue-50/30 to-indigo-50/30 dark:from-blue-900/10 dark:to-indigo-900/10">
                         <label className={`block text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400`}>
                           Exam Question Paper
                         </label>
                         <select 
                           value={examPaperType} 
                           onChange={(e) => setExamPaperType(e.target.value)}
-                          className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-blue-600/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
+                          className={`w-full px-2.5 py-2 rounded-xl border text-xs focus:ring-2 focus:ring-blue-600/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
                         >
                           <option value="paper-full">Full Paper (MCQs, Short 2/3/4m, Long 5/8/10m)</option>
                           <option value="paper-mcq">MCQ Paper (1 Mark each)</option>
@@ -2496,7 +2826,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                             <select
                               value={universityMarks}
                               onChange={(e) => setUniversityMarks(Number(e.target.value))}
-                              className={`w-full p-2.5 rounded-xl border text-xs focus:ring-2 focus:ring-blue-600/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
+                              className={`w-full px-2.5 py-2 rounded-xl border text-xs focus:ring-2 focus:ring-blue-600/20 transition-all outline-none ${isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5]" : "bg-white border-[#E0E0D5] text-[#3A3A2F]"}`}
                             >
                               <option value={10}>10 Marks</option>
                               <option value={20}>20 Marks</option>
@@ -2511,12 +2841,13 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                         <button
                           onClick={generateExamPaper}
                           disabled={!fileData || loading}
-                          className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-2.5 px-4 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
+                          className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white disabled:opacity-50 disabled:cursor-not-allowed py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
                         >
                           {loading && generatingType === "exam-paper" ? <Loader2 size={14} className="animate-spin" /> : <FileQuestion size={14} />}
                           Generate Exam Paper
                         </button>
                       </div>
+                        )}
                     </div>
                   </div>
                   <button
@@ -2577,15 +2908,13 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           </div>
         </div>
       </div>
+      )}
       {/* Main Content Area */}
-      <div className={`flex-1 overflow-auto p-8 relative transition-colors duration-300 ${isDarkMode ? "bg-[#181816]" : "bg-[#F5F5F0]"}`}>
-        <div className="absolute top-4 right-4 z-20">
-          <UserProfile user={user} isDarkMode={isDarkMode} />
-        </div>
+      <div className={`relative z-10 min-w-0 overflow-auto bg-transparent p-8 transition-colors duration-300 ${isChatbotOpen ? "xl:pr-[432px]" : ""}`}>
         <div className="mb-8 relative z-10">
-          <Chatbot fileUri={fileData?.fileUri} mimeType={fileData?.mimeType} isDarkMode={isDarkMode} embedded={false} />
+          <Chatbot fileUri={fileData?.fileUri} mimeType={fileData?.mimeType} isDarkMode={isDarkMode} embedded={false} onOpenChange={setIsChatbotOpen} />
         </div>
-        <div className="max-w-4xl mx-auto space-y-8">
+        <div id="learning-content" className={`${!resultText && !flashcards.length && !videoData && !slides.length ? "max-w-none" : "max-w-4xl"} mx-auto space-y-8 relative z-10 scroll-mt-6`}>
           {error && (
             <motion.div 
               initial={{ opacity: 0, y: -10 }}
@@ -2617,7 +2946,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                   </a>
                 </div>
               </div>
-              <button 
+              <button
                 onClick={() => setError(null)}
                 className="text-[#991B1B] hover:bg-[#FEE2E2] p-2 rounded-full transition-colors absolute top-4 right-4 cursor-pointer"
                 aria-label="Close error"
@@ -2626,81 +2955,181 @@ This study companion has been successfully downloaded from your Notivexa AI Port
               </button>
             </motion.div>)}
 
+          {activeNav === "library" ? (
+            <LibraryPanel
+              books={allLibraryBooks}
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
+              selectedDepartment={selectedDept}
+              onDepartmentChange={setSelectedDept}
+              selectedFileUri={fileData?.fileUri}
+              isDarkMode={isDarkMode}
+              onStudyBook={handleStudyLibraryBook}
+              onDownloadBook={handleDownloadLibraryBook}
+              onAddBookLink={handleAddBookLink}
+              onAddLocalBook={handleAddLocalBook}
+              onRemoveBook={handleRemoveLibraryBook}
+              busyBookId={busyLibraryBookId}
+            />
+          ) : (
+          <>
           {!resultText && !flashcards.length && !videoData && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-center overflow-hidden bg-gradient-to-br from-indigo-50/60 via-white to-sky-50/60 z-0">
-              {/* Scattered Vector Open Book Illustrations & Academic Symbols matching reference design */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden select-none -z-10">
-                {/* Top Left Book */}
-                <div className="absolute top-12 left-12 -rotate-12 transform hover:scale-105 transition-transform duration-500 opacity-45 text-indigo-400/80 p-4 bg-white/70 rounded-2xl shadow-xs backdrop-blur-xs flex items-center justify-center">
-                  <BookOpen size={56} strokeWidth={1.5} />
-                </div>
-                {/* Top Right Book */}
-                <div className="absolute top-16 right-16 rotate-12 transform hover:scale-105 transition-transform duration-500 opacity-45 text-sky-500/80 p-4 bg-white/70 rounded-2xl shadow-xs backdrop-blur-xs flex items-center justify-center">
-                  <BookOpen size={64} strokeWidth={1.5} />
-                </div>
-                {/* Bottom Left Book */}
-                <div className="absolute bottom-16 left-16 rotate-6 transform hover:scale-105 transition-transform duration-500 opacity-45 text-violet-500/80 p-5 bg-white/70 rounded-2xl shadow-xs backdrop-blur-xs flex items-center justify-center">
-                  <BookOpen size={72} strokeWidth={1.5} />
-                </div>
-                {/* Bottom Right Book */}
-                <div className="absolute bottom-12 right-20 -rotate-6 transform hover:scale-105 transition-transform duration-500 opacity-45 text-indigo-500/80 p-5 bg-white/70 rounded-2xl shadow-xs backdrop-blur-xs flex items-center justify-center">
-                  <BookOpen size={72} strokeWidth={1.5} />
-                </div>
-                {/* Mid Right Book */}
-                <div className="absolute top-1/2 right-10 rotate-15 transform -translate-y-1/2 opacity-35 text-sky-400/80 p-3 bg-white/60 rounded-2xl shadow-xs backdrop-blur-xs">
-                  <BookOpen size={48} strokeWidth={1.5} />
-                </div>
-                {/* Mid Left Book */}
-                <div className="absolute top-1/2 left-8 -rotate-12 transform -translate-y-1/2 opacity-35 text-indigo-400/80 p-3 bg-white/60 rounded-2xl shadow-xs backdrop-blur-xs">
-                  <BookOpen size={44} strokeWidth={1.5} />
-                </div>
-                {/* Additional floating book symbols and academic accents */}
-                <div className="absolute top-28 left-48 text-indigo-300 font-bold opacity-60 text-lg">+</div>
-                <div className="absolute top-36 right-44 text-sky-400 font-bold opacity-60 text-lg">+</div>
-                <div className="absolute bottom-36 left-40 text-violet-400 font-bold opacity-60 text-lg">+</div>
-                <div className="absolute top-24 left-1/3 text-2xl opacity-20">📖</div>
-                <div className="absolute bottom-28 right-1/3 text-2xl opacity-20">📚</div>
-                <div className="absolute top-1/3 right-24 w-2 h-2 rounded-full bg-sky-400 opacity-40"></div>
-                <div className="absolute bottom-1/3 left-24 w-3 h-3 rounded-full bg-indigo-400 opacity-30"></div>
-              </div>
+            <div className="relative z-0 flex min-h-[calc(100vh-14rem)] flex-col justify-center gap-5 overflow-hidden rounded-3xl bg-transparent py-5">
+              <div className="relative z-10 flex min-h-[27vh] w-full flex-col items-center justify-center overflow-hidden px-4 py-5 text-center">
 
-              {/* Floating ambient glow effect */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-tr from-sky-400/15 via-indigo-400/15 to-violet-400/15 rounded-full blur-3xl pointer-events-none -z-10"></div>
+                        <motion.div
+                          initial={{ opacity: 0, y: 12 }}
+                          animate={{ opacity: 1, y: [0, -5, 0] }}
+                          transition={{ opacity: { duration: 0.5 }, y: { duration: 5, repeat: Infinity, ease: "easeInOut" } }}
+                          className="relative z-10 mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-sky-600 to-indigo-700 text-white shadow-lg shadow-sky-900/15"
+                        >
+                  <BookOpen size={34} strokeWidth={1.5} />
+                        </motion.div>
 
-              <div className="w-20 h-20 bg-gradient-to-tr from-sky-500 via-indigo-600 to-violet-600 rounded-[28px] shadow-xl shadow-sky-500/25 text-white flex items-center justify-center mb-6 transform hover:scale-105 transition-all">
-                <BookOpen size={38} />
-              </div>
-
-              <h2 className="text-3xl md:text-5xl font-bold font-serif text-slate-900 mb-3 tracking-tight">
+              <h2 className="text-3xl md:text-4xl font-bold font-serif text-slate-900 mb-2 tracking-tight">
                 Welcome to <span className="bg-gradient-to-r from-sky-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent">Notivexa AI</span>
               </h2>
-              <p className="text-slate-600 text-sm md:text-base max-w-xl mb-8 leading-relaxed">
-                Your intelligent multi-modal academic companion. Generate interactive presentations, handwritten notes, flashcards, and video explainers instantly.
+              <p className="text-slate-600 text-sm md:text-base max-w-xl leading-relaxed">
+                Your academic workspace for organizing study activity and continuing recent work.
               </p>
 
-              {/* Quick Feature Badges */}
-              <div className="flex flex-wrap justify-center gap-3 max-w-xl mb-8">
-                <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/90 border border-sky-200/80 shadow-xs text-xs font-semibold text-slate-700 backdrop-blur-sm">
-                  <Presentation size={15} className="text-sky-600" /> AI PowerPoint Studio
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/90 border border-indigo-200/80 shadow-xs text-xs font-semibold text-slate-700 backdrop-blur-sm">
-                  <FileText size={15} className="text-indigo-600" /> Handwritten Summaries
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/90 border border-amber-200/80 shadow-xs text-xs font-semibold text-slate-700 backdrop-blur-sm">
-                  <BookOpen size={15} className="text-amber-600" /> Interactive Flashcards
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/90 border border-violet-200/80 shadow-xs text-xs font-semibold text-slate-700 backdrop-blur-sm">
-                  <FileVideo size={15} className="text-violet-600" /> Smart Video Theatre
-                </div>
               </div>
+              <motion.div
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.45, delay: 0.2 }}
+                className="mx-auto grid w-full max-w-6xl gap-4 px-4 lg:grid-cols-[1.1fr_1fr]"
+              >
+                <section className={`rounded-2xl border p-5 shadow-sm backdrop-blur-sm ${isDarkMode ? "border-[#383832] bg-[#22221F]/90" : "border-slate-200/80 bg-white/85"}`}>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className={`text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Recent study activity</h3>
+                      <p className={`mt-1 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Pick up from your saved work.</p>
+                    </div>
+                    <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${isDarkMode ? "bg-[#383832] text-sky-300" : "bg-sky-50 text-sky-700"}`}>
+                      <Clock size={17} />
+                    </div>
+                  </div>
+                  {historyDeleteError && (
+                    <p role="alert" className="mb-3 text-xs text-red-600">{historyDeleteError}</p>
+                  )}
+                  {historyLoading ? (
+                    <div className={`flex items-center gap-2 py-5 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
+                      <Loader2 size={15} className="animate-spin" /> Loading saved study activity
+                    </div>
+                  ) : uniqueHistoryItems.length > 0 ? (
+                    <div className="divide-y divide-slate-200/70 dark:divide-slate-700/70">
+                      {uniqueHistoryItems.slice(0, 4).map((item) => (
+                        <div key={item.id} className="flex items-center gap-2 py-2">
+                          <button
+                            type="button"
+                            onClick={() => handleSelectHistoryItem(item)}
+                            className={`flex min-w-0 flex-1 items-center gap-3 py-1 text-left transition-colors ${isDarkMode ? "hover:text-sky-300" : "hover:text-sky-800"}`}
+                          >
+                            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDarkMode ? "bg-[#383832] text-sky-300" : "bg-sky-50 text-sky-700"}`}>
+                              <FileText size={15} />
+                            </div>
+                            <span className="min-w-0 flex-1">
+                              <span className={`block truncate text-xs font-semibold ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-700"}`}>{item.title}</span>
+                              <span className={`mt-0.5 block text-[10px] capitalize ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>{item.type.replaceAll("-", " ")}</span>
+                            </span>
+                            <ArrowRight size={14} className="shrink-0 opacity-60" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => void handleDeleteHistoryItem(e, item.id)}
+                            disabled={deletingHistoryId !== null}
+                            aria-label={`Delete ${item.title} from study history`}
+                            title="Delete from history"
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isDarkMode ? "text-[#A1A194] hover:bg-red-950/40 hover:text-red-300" : "text-slate-400 hover:bg-red-50 hover:text-red-600"}`}
+                          >
+                            {deletingHistoryId === item.id ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className={`flex min-h-24 flex-col items-start justify-center rounded-xl border border-dashed px-4 py-3 ${isDarkMode ? "border-[#45453B] bg-[#2A2A26]" : "border-slate-200 bg-slate-50/70"}`}>
+                      <p className={`text-xs font-medium ${isDarkMode ? "text-[#C2C2B0]" : "text-slate-600"}`}>No saved activity yet.</p>
+                    </div>
+                  )}
+                </section>
 
+                <section className={`rounded-2xl border p-5 shadow-sm backdrop-blur-sm ${isDarkMode ? "border-[#383832] bg-[#22221F]/90" : "border-slate-200/80 bg-white/85"}`}>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className={`text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Study overview</h3>
+                      <p className={`mt-1 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>A snapshot of your saved learning work.</p>
+                    </div>
+                    <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${isDarkMode ? "bg-[#383832] text-emerald-300" : "bg-emerald-50 text-emerald-700"}`}>
+                      <Activity size={17} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { label: "Saved resources", value: uniqueHistoryItems.length, icon: FileText, tone: "sky" },
+                      { label: "Note sets", value: savedNotesCount, icon: BookOpen, tone: "indigo" },
+                      { label: "Practice sets", value: practiceSetsCount, icon: CheckCircle2, tone: "emerald" },
+                      { label: "Study sources", value: studySourcesCount, icon: GraduationCap, tone: "amber" },
+                    ].map(({ label, value, icon: Icon, tone }) => (
+                      <div key={label} className={`flex min-h-24 items-center gap-3 rounded-xl border p-3 ${isDarkMode ? "border-[#45453B] bg-[#2A2A26]" : "border-slate-200 bg-white"}`}>
+                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone === "sky" ? "bg-sky-50 text-sky-700" : tone === "indigo" ? "bg-indigo-50 text-indigo-700" : tone === "emerald" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                          <Icon size={17} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`text-lg font-bold leading-none ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>{value}</p>
+                          <p className={`mt-1 truncate text-[10px] font-medium ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>{label}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </motion.div>
+
+              <section className="mx-auto w-full max-w-6xl px-4 pb-2">
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className={`text-lg font-bold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>Quick Academic Tools</h3>
+                    <p className={`mt-1 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Choose a tool to continue your study session.</p>
+                  </div>
+                  <button type="button" onClick={() => navigateToSection("tools")} className="shrink-0 text-xs font-semibold text-violet-700 transition-colors hover:text-violet-900 dark:text-violet-300">
+                    View all tools <ArrowRight size={13} className="ml-1 inline" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {[
+                    { title: "Chapter Summary", description: "Multi-chapter summaries and insights", icon: FileText, color: "from-blue-600 to-indigo-600", action: generateNotes },
+                    { title: "Question Bank", description: "MCQs, short and long answers", icon: FileQuestion, color: "from-violet-600 to-purple-600", action: generateQuestionBank },
+                    { title: "PPT Builder", description: "Professional slide decks and diagrams", icon: Presentation, color: "from-pink-600 to-fuchsia-600", action: generatePPT },
+                    { title: "Lesson Planner", description: "Plan focused study sessions", icon: Calendar, color: "from-orange-500 to-amber-500", action: generateLessonPlan },
+                    { title: "Flashcards", description: "Interactive cards for active recall", icon: BookOpen, color: "from-emerald-600 to-teal-500", action: generateFlashcards },
+                    { title: "Video Lesson", description: "AI narration scripts and video player", icon: FileVideo, color: "from-rose-600 to-pink-600", action: generateVideoExplanation },
+                  ].map(({ title, description, icon: Icon, color, action }) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onClick={() => runQuickTool(action)}
+                      className={`group flex min-h-28 items-center gap-4 rounded-2xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${isDarkMode ? "border-[#383832] bg-gradient-to-br from-[#22221F] to-[#282824] hover:border-slate-600" : "border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50 hover:border-sky-200"}`}
+                    >
+                      <span className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${color} text-white shadow-md`}>
+                        <Icon size={23} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-sm font-bold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>{title}</span>
+                        <span className={`mt-1 block text-xs leading-relaxed ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>{description}</span>
+                      </span>
+                      <ArrowRight size={18} className={`shrink-0 transition-transform group-hover:translate-x-1 ${isDarkMode ? "text-slate-500" : "text-slate-400"}`} />
+                    </button>
+                  ))}
+                </div>
+              </section>
 
             </div>)}
 
 
 
           {slides.length > 0 && (
-            <div className="bg-white rounded-[24px] shadow-[0_4px_25px_rgba(15,23,42,0.06)] overflow-hidden relative border border-slate-200/80">
+            <div className="relative overflow-hidden rounded-[24px] border border-white/80 bg-white/85 shadow-[0_16px_48px_rgba(37,99,235,0.10)] backdrop-blur-xl">
               <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-pink-500 via-rose-600 to-pink-600"></div>
               <div className="border-b border-[#E0E0D5] p-6 flex items-center justify-between">
                 <h3 className="font-serif text-2xl text-[#3A3A2F]">
@@ -2765,9 +3194,9 @@ This study companion has been successfully downloaded from your Notivexa AI Port
             </div>
           )}
           {resultText && (
-            <div className="bg-white rounded-[24px] shadow-[0_4px_25px_rgba(15,23,42,0.06)] overflow-hidden relative border border-slate-200/80">
-              <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-sky-500 via-indigo-600 to-violet-600"></div>
-              <div className="border-b border-[#E0E0D5] p-6 flex items-center justify-between">
+            <div className="relative overflow-hidden rounded-[24px] border border-white/80 bg-white/85 shadow-[0_16px_48px_rgba(37,99,235,0.10)] backdrop-blur-xl">
+              <div className="absolute top-0 left-0 z-10 w-full h-1.5 bg-gradient-to-r from-sky-500 via-indigo-600 to-violet-600"></div>
+              <div className="relative z-10 border-b border-[#E0E0D5] p-6 flex flex-wrap items-center justify-between gap-3">
                 <h3 className="font-serif text-2xl text-[#3A3A2F]">
                   {resultType === "lesson-plan" ? "Study Lesson Planner" : resultType === "question-bank" ? "Study Question Bank" : resultType === "assessment" ? "Assessment Paper" : "Chapter-wise Summary"}
                 </h3>
@@ -2775,6 +3204,31 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                   <div className="flex flex-wrap items-center gap-2">
 { (
                       <>
+                        {resultPages.length > 1 && (
+                          <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white/90 p-1 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => setCurrentPageIndex((page) => Math.max(0, page - 1))}
+                              disabled={currentPageIndex === 0}
+                              aria-label="Previous page"
+                              className="flex h-8 w-8 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <ChevronLeft size={16} />
+                            </button>
+                            <span className="min-w-[72px] text-center text-xs font-semibold text-slate-700" aria-live="polite">
+                              Page {currentPageIndex + 1} of {resultPages.length}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setCurrentPageIndex((page) => Math.min(resultPages.length - 1, page + 1))}
+                              disabled={currentPageIndex >= resultPages.length - 1}
+                              aria-label="Next page"
+                              className="flex h-8 w-8 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <ChevronRight size={16} />
+                            </button>
+                          </div>
+                        )}
                         <select
                           value={pageStyle ?? "ruled"}
                           onChange={(e) => setPageStyle(e.target.value)}
@@ -2856,7 +3310,13 @@ This study companion has been successfully downloaded from your Notivexa AI Port
 
               </div>
               
-              <div className="p-8">
+              <div
+                ref={notesViewerRef}
+                role="region"
+                aria-label="Summary page viewer"
+                tabIndex={0}
+                className="relative z-10 max-h-[80vh] overflow-auto p-4 sm:p-8"
+              >
                 {/* 
                   Applying a handwriting font class when in student mode.
                 */}
@@ -2907,10 +3367,10 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       </div>
                     </>)}
                   <div className={(mode === 'student' && resultType !== 'exam-paper') ? "pl-8" : ""}>
-                      { resultText.split('---SET_SEPARATOR---').map((setMarkdown, index) => (
+                      { resultText.split('---SET_SEPARATOR---').map((setMarkdown, index, sets) => (
                         <div key={`set-${index}`} className="mb-10">
                           {setMarkdown.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i).map((pageMarkdown, pageIndex, pageArr) => (
-                            <div key={`page-${pageIndex}`} className="relative">
+                            <div key={`page-${pageIndex}`} className={`relative ${sets.slice(0, index).reduce((total, set) => total + set.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i).filter((page) => page.trim()).length, 0) + pageArr.slice(0, pageIndex).filter((page) => page.trim()).length === currentPageIndex ? "" : "hidden"}`}>
 
                               <div className="markdown-content">
                                 <ReactMarkdown
@@ -3472,6 +3932,8 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           </motion.div>
         </div>
       )}
+          </>
+          )}
       </div>
       </div>
     
@@ -3481,6 +3943,71 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           theme={pptTheme}
           onClose={() => setShowPreviewModal(false)} 
         />
+      )}
+      {showSettings && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && setShowSettings(false)}>
+          <section role="dialog" aria-modal="true" aria-labelledby="settings-title" className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${isDarkMode ? "border-[#383832] bg-[#22221F] text-[#E0E0D5]" : "border-slate-200 bg-white text-slate-800"}`}>
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 id="settings-title" className="text-lg font-semibold">Study settings</h2>
+                <p className={`mt-1 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Personalize your reading page.</p>
+              </div>
+              <button type="button" onClick={() => setShowSettings(false)} aria-label="Close settings" className={`flex h-9 w-9 items-center justify-center rounded-full ${isDarkMode ? "hover:bg-[#383832]" : "hover:bg-slate-100"}`}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <label className="flex items-center justify-between gap-4 text-sm">
+                <span>Page style</span>
+                <select value={pageStyle} onChange={(event) => setPageStyle(event.target.value)} className={`rounded-lg border px-3 py-2 text-xs outline-none ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"}`}>
+                  <option value="plain">Plain</option>
+                  <option value="ruled">Ruled</option>
+                  <option value="box">Grid</option>
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-4 text-sm">
+                <span>Ink color</span>
+                <select value={penColor} onChange={(event) => setPenColor(event.target.value)} className={`rounded-lg border px-3 py-2 text-xs outline-none ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"}`}>
+                  <option value="blue">Blue</option>
+                  <option value="black">Black</option>
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-4 text-sm">
+                <span>Handwriting font</span>
+                <select value={handwritingFont} onChange={(event) => setHandwritingFont(event.target.value)} className={`max-w-44 rounded-lg border px-3 py-2 text-xs outline-none ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"}`}>
+                  <option value="font-handwriting">Caveat</option>
+                  <option value="font-handwriting-indie">Indie Flower</option>
+                  <option value="font-handwriting-kalam">Kalam</option>
+                  <option value="font-handwriting-shadows">Shadows Into Light</option>
+                  <option value="font-handwriting-patrick">Patrick Hand</option>
+                </select>
+              </label>
+            </div>
+          </section>
+        </div>
+      )}
+      {showAbout && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && setShowAbout(false)}>
+          <section role="dialog" aria-modal="true" aria-labelledby="about-title" className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${isDarkMode ? "border-[#383832] bg-[#22221F] text-[#E0E0D5]" : "border-slate-200 bg-white text-slate-800"}`}>
+            <div className="mb-4 flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 text-white">
+                  <GraduationCap size={22} />
+                </div>
+                <div>
+                  <h2 id="about-title" className="text-lg font-semibold">About Notivexa AI</h2>
+                  <p className={`text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Learning workspace</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setShowAbout(false)} aria-label="Close about dialog" className={`flex h-9 w-9 items-center justify-center rounded-full ${isDarkMode ? "hover:bg-[#383832]" : "hover:bg-slate-100"}`}>
+                <X size={18} />
+              </button>
+            </div>
+            <p className={`text-sm leading-relaxed ${isDarkMode ? "text-[#C2C2B0]" : "text-slate-600"}`}>
+              Notivexa AI brings study materials, learning tools, and saved study activity together in one academic workspace.
+            </p>
+          </section>
+        </div>
       )}
 </div>
   );

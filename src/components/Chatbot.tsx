@@ -8,7 +8,7 @@ interface Message {
   text: string;
 }
 
-export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false }: { fileUri?: string; mimeType?: string; isDarkMode: boolean; embedded?: boolean }) => {
+export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpenChange }: { fileUri?: string; mimeType?: string; isDarkMode: boolean; embedded?: boolean; onOpenChange?: (open: boolean) => void }) => {
   const [isOpen, setIsOpen] = useState(embedded);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -54,7 +54,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false }: { f
           <div className="p-2 bg-sky-600 text-white rounded-lg">
             <Bot size={18} />
           </div>
-          <h3 className={`font-semibold ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>AI Tutor</h3>
+              <h3 className={`font-semibold ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>AI Chatbot</h3>
         </div>
         <div className="flex items-center gap-2">
           {messages.length > 0 && (
@@ -63,7 +63,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false }: { f
             </button>
           )}
           {!embedded && (
-            <button onClick={() => setIsOpen(false)} className={`p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+                <button onClick={() => { setIsOpen(false); onOpenChange?.(false); }} className={`p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
               <X size={18} />
             </button>
           )}
@@ -75,7 +75,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false }: { f
           <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-60">
             <Bot size={40} className={isDarkMode ? "text-slate-500" : "text-slate-400"} />
             <p className={`text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-              Hi! I'm your AI Tutor. Ask me anything about your study materials!
+                  Hi! I'm your AI Chatbot. Ask me anything about your study materials!
             </p>
           </div>
         )}
@@ -144,7 +144,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false }: { f
   return (
     <>
       <button 
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => { const nextIsOpen = !isOpen; setIsOpen(nextIsOpen); onOpenChange?.(nextIsOpen); }}
         className={`fixed bottom-6 right-6 p-4 rounded-full shadow-2xl hover:scale-105 transition-transform z-40 ${isDarkMode ? "bg-[#383832] text-[#E0E0D5]" : "bg-sky-600 text-white"}`}
       >
         <Bot size={24} />
@@ -157,7 +157,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false }: { f
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className={`fixed bottom-24 right-6 w-[400px] max-w-[calc(100vw-3rem)] z-50`}
+                className="relative z-50 w-full max-w-full xl:fixed xl:bottom-24 xl:right-6 xl:w-[400px] xl:max-w-[calc(100vw-3rem)]"
           >
             {chatContent}
           </motion.div>

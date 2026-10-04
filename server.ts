@@ -4,6 +4,7 @@ import multer from "multer";
 import { createRequire } from "module";
 import fs from "fs";
 import os from "os";
+import { randomUUID } from "crypto";
 const customRequire = typeof __filename !== "undefined" ? createRequire(__filename) : createRequire(import.meta.url);
 const pdfParse = customRequire("pdf-parse");
 import { createServer as createViteServer } from "vite";
@@ -26,6 +27,7 @@ app.use(express.json({ limit: "50mb" }));
 
 // In-memory cache for PDF texts to bypass 1,048,576 token limit on massive files
 const pdfTextCache = new Map<string, string>();
+const pdfPageCountCache = new Map<string, number>();
 
 const PRESET_BOOKS: Record<string, { title: string; author: string; contentReference: string }> = {
   "book:gatsby": {
@@ -151,6 +153,25 @@ async function getContentParts(fileUri: string, mimeType: string, prompt: string
         role: "user",
         parts: [
           { text: `${book.contentReference}\n\nPlease generate a highly detailed, accurate, and structured study output for this work according to the instructions below.` },
+          { text: prompt }
+        ]
+      }
+    ];
+  }
+
+  if (fileUri && fileUri.startsWith("text:")) {
+    const textContent = pdfTextCache.get(fileUri);
+    if (!textContent) {
+      throw new Error("The extracted document text is no longer available. Please upload the document again.");
+    }
+
+    const maxCharacters = 3000000;
+    const textToUse = textContent.slice(0, maxCharacters);
+    return [
+      {
+        role: "user",
+        parts: [
+          { text: `Here is the extracted document text:\n\n${textToUse}` },
           { text: prompt }
         ]
       }
@@ -412,11 +433,15 @@ function checkIsOverload(error: any, errorMsg: string): boolean {
 function checkIsTimeout(error: any, errorMsg: string): boolean {
   const status = error.status || error.statusCode || error.code || error.error?.status || error.error?.code;
   const statusStr = String(status || "").toUpperCase();
+  const causeCode = String(error.cause?.code || "").toUpperCase();
+  const causeMsg = String(error.cause?.message || "").toLowerCase();
   
   return (
     statusStr === "504" ||
     statusStr === "408" ||
     statusStr === "DEADLINE_EXCEEDED" ||
+    causeCode === "UND_ERR_CONNECT_TIMEOUT" ||
+    causeMsg.includes("connect timeout") ||
     errorMsg.includes("504") ||
     errorMsg.includes("408") ||
     errorMsg.includes("deadline") ||
@@ -495,26 +520,33 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 1, initial
   }
 }
 
-async function generateContentWithFallback(ai: any, params: any): Promise<any> {
+async function generateContentWithFallback(ai: any, params: any, excludedModels = new Set<string>(), requireText = false): Promise<any> {
   const modelsToTry = [
     "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-3.5-flash",
-    "gemini-1.5-flash",
-    "gemini-2.5-pro",
-    "gemini-1.5-pro"
+    "gemini-3.1-pro-preview"
   ];
   const initialModel = params.model || "gemini-3.5-flash-lite";
   const uniqueModels = Array.from(new Set([initialModel, ...modelsToTry]));
+  const availableModels = uniqueModels.filter((model) => !excludedModels.has(model));
   
   let lastError: any = null;
-  for (let i = 0; i < uniqueModels.length; i++) {
-    const model = uniqueModels[i];
-    const hasMoreModels = i < uniqueModels.length - 1;
+  if (availableModels.length === 0) {
+    throw new Error("All Gemini fallback models are unavailable for this request. Please retry later.");
+  }
+  for (let i = 0; i < availableModels.length; i++) {
+    const model = availableModels[i];
+    const hasMoreModels = i < availableModels.length - 1;
     try {
       console.log(`Attempting Gemini generation with model: ${model}`);
       const apiParams = { ...params, model };
-      return await withRetry(() => ai.models.generateContent(apiParams), 3, 2000, true);
+      const response = await withRetry<any>(() => ai.models.generateContent(apiParams), 3, 2000, true);
+      if (!requireText || response.text?.trim()) return response;
+
+      const finishReason = response.candidates?.[0]?.finishReason;
+      lastError = new Error(`Model ${model} returned an empty response${finishReason ? ` (finish reason: ${finishReason})` : ""}.`);
+      console.warn(lastError.message);
     } catch (error: any) {
       lastError = error;
       const errorMsg = (error.message || "").toLowerCase();
@@ -530,6 +562,7 @@ async function generateContentWithFallback(ai: any, params: any): Promise<any> {
         error.status === 400 ||
         errorMsg.includes("exceeds the maximum number of tokens allowed");
       
+      if (isQuotaOrTemporaryError) excludedModels.add(model);
       if (isQuotaOrTemporaryError && hasMoreModels) {
         console.warn(`Model ${model} had quota, rate limit, demand, or availability issue. Trying next available model in fallback list...`);
         continue;
@@ -542,6 +575,9 @@ async function generateContentWithFallback(ai: any, params: any): Promise<any> {
 
 function formatGeminiError(error: any): string {
   const msg = error?.message || String(error);
+  if (String(error?.cause?.code || "").toUpperCase() === "UND_ERR_CONNECT_TIMEOUT") {
+    return "Could not connect to the Gemini API before the request timed out. Check your internet connection, firewall, or proxy settings, then try again.";
+  }
   if (msg.includes("exceeds the maximum number of tokens allowed") || msg.includes("token count exceeds") || msg.includes("1048576")) {
     return "The uploaded document is too large (exceeds the limit of 1,048,576 tokens). Please try uploading a smaller document, or a specific chapter, so Notivexa can process it effectively.";
   }
@@ -640,29 +676,45 @@ app.post("/api/upload-pdf", upload.single("file"), async (req, res) => {
     
     // Attempt to extract text using pdf-parse if it is a PDF
     let parsedText = "";
+    let parsedPageCount = 0;
     if (mime.includes("application/pdf")) {
       try {
         const data = await pdfParse(req.file.buffer);
         parsedText = data.text || "";
+        parsedPageCount = Number(data.numpages) || 0;
         console.log(`Successfully extracted ${parsedText.length} characters from PDF using pdf-parse`);
       } catch (parseErr) {
         console.warn("Failed to extract text using pdf-parse, will rely entirely on Gemini File API OCR:", parseErr);
       }
     }
 
-    const uploadedFile = await withRetry(() => ai.files.upload({
-      file: tempPath,
-      config: { mimeType: req.file.mimetype },
-    }));
-    
-    fs.unlinkSync(tempPath); // Clean up
+    let uploadedFileUri: string;
+    let uploadedMimeType = req.file.mimetype;
+    try {
+      const uploadedFile = await withRetry(() => ai.files.upload({
+        file: tempPath,
+        config: { mimeType: req.file.mimetype },
+      }));
+      uploadedFileUri = uploadedFile.uri;
+      uploadedMimeType = uploadedFile.mimeType || uploadedMimeType;
+    } catch (uploadError: any) {
+      if (!mime.includes("application/pdf") || parsedText.trim().length <= 100) {
+        throw uploadError;
+      }
+
+      uploadedFileUri = `text:${randomUUID()}`;
+      console.warn(`Gemini File API upload failed; continuing with extracted PDF text only: ${uploadError.message}`);
+    } finally {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    }
     
     // Cache parsed text if it's meaningful
     if (parsedText && parsedText.trim().length > 100) {
-      pdfTextCache.set(uploadedFile.uri, parsedText);
+      pdfTextCache.set(uploadedFileUri, parsedText);
     }
+    pdfPageCountCache.set(uploadedFileUri, parsedPageCount || (mime.startsWith("image/") ? 1 : 0));
     
-    res.json({ fileUri: uploadedFile.uri, mimeType: uploadedFile.mimeType });
+    res.json({ fileUri: uploadedFileUri, mimeType: uploadedMimeType });
   } catch (error: any) {
     console.error("Upload error:", error.stack || error);
     res.status(500).json({ error: error.message, stack: error.stack });
@@ -674,62 +726,136 @@ app.post("/api/generate-notes", async (req, res) => {
   try {
     const { fileUri, mimeType, focusArea, mode } = req.body;
     if (!fileUri) return res.status(400).json({ error: "Missing fileUri" });
-        const ai = getGenAI();
-    
-        let lengthInstructions = `Generate a highly comprehensive and detailed summary of the provided text.
-      Break the summary into logical pages using the "---PAGE_BREAK---" marker between major sections or topics.
-      Aim for a detailed summary, providing step-by-step breakdowns and examples, but keep it concise if the content is extremely large to prevent timeouts.
-      Ensure the output does not exceed the model token limits and stays within a reasonable processing time.`;
+    const ai = getGenAI();
+    const pageCount = pdfPageCountCache.get(fileUri) || 0;
+    const isPaginatedPdf = mimeType?.toLowerCase().includes("pdf") && pageCount > 1;
+    const targetNotePages = pageCount >= 25
+      ? Math.min(120, Math.max(50, Math.ceil(pageCount / 2)))
+      : pageCount > 0
+        ? Math.max(2, pageCount * 2)
+        : 50;
+    const batchCount = isPaginatedPdf
+      ? Math.max(Math.ceil(targetNotePages / 6), Math.ceil(pageCount / 15))
+      : 1;
+    const extractedPages = pdfTextCache.get(fileUri)?.split("\f");
+    const hasPageSeparatedText = Boolean(isPaginatedPdf && extractedPages && extractedPages.length >= pageCount);
+    const extractedDocumentText = pdfTextCache.get(fileUri);
+    const isExtractedTextFallback = fileUri.startsWith("text:") && Boolean(extractedDocumentText);
+    const generatedBatches: string[] = [];
+    const excludedModels = new Set<string>();
 
-    const prompt = `
-      You are an expert teacher and exam notes writer. I have provided a book or study material.
-      Focus Area: ${focusArea || 'General Understanding'}
-      
-      Instructions:
-      1. Start with a simple and clear definition of the topic.
-      2. Provide the main explanation in points.
-      3. YOU MUST use standard Markdown bullet points (hyphens '-') for all lists.
-         - EVERY single point MUST start on a NEW LINE.
-         - NEVER place multiple points on the same line.
-         - DO NOT use Unicode bullet characters like '•' or '·'.
-      4. For algorithms, use a numbered list (1., 2., 3...).
-      5. For comparisons, use a simple text-based Markdown table format. IMPORTANT: If you need to include list items or new lines INSIDE a table cell, you MUST use the HTML <br> tag to separate them (e.g., - Point 1<br>- Point 2). DO NOT use unicode bullets or spaces to separate list items in tables.
-      6. For diagrams, use Mermaid syntax inside a mermaid code block. DO NOT generate any text explanation, summary, or legend before or after the diagram. Just the diagram itself.
-      7. Use bold formatting (**) for key points and important terms to enhance readability. At the very beginning, ALWAYS provide the Chapter Name, Unit Name, and Title in a BIG FONT using Markdown Headers (# and ##).
-      8. End with a short conclusion if needed.
-      
-      
+    for (let batchIndex = 0; batchIndex < batchCount; batchIndex++) {
+      const sourceStart = isPaginatedPdf ? Math.floor(batchIndex * pageCount / batchCount) + 1 : 1;
+      const sourceEnd = isPaginatedPdf ? Math.floor((batchIndex + 1) * pageCount / batchCount) : pageCount;
+      const noteStart = Math.floor(batchIndex * targetNotePages / batchCount) + 1;
+      const noteEnd = Math.floor((batchIndex + 1) * targetNotePages / batchCount);
+      const notePagesInBatch = noteEnd - noteStart + 1;
+      const isFinalBatch = batchIndex === batchCount - 1;
+      const pageScope = isPaginatedPdf
+        ? `Read every source page from page ${sourceStart} through page ${sourceEnd} of ${pageCount}. Do not skip pages or use content from outside this range.${isFinalBatch ? " For the final book-level overview and quick revision only, additionally inspect the complete document." : ""}`
+        : "Read the complete uploaded document, including every text page and scanned image. Inspect all diagrams, tables, equations, captions, and examples.";
+      const prompt = `
+    You are an academic study assistant. Generate clear, accurate, exam-oriented Markdown notes from the uploaded document and the requested document range. Do not create or describe image files or rendered handwritten pages.
 
-      Tasks:
-      ${lengthInstructions}
-      3. PAGE-BY-PAGE SCAN: Carefully scan the uploaded file ONE BY ONE PAGE. You must read both text and image-based (scanned) pages, extracting all relevant information.
-      4. Convert the content into structured, step-by-step study notes suitable for a student.
-      5. ALGORITHMS: Whenever an algorithm is discussed, extract it and format it clearly as a STEP-BY-STEP numbered list.
-      6. IMAGE-BASED DIAGRAMS & CHARTS: Whenever there is a diagram, chart, block diagram, or figure in the original text (whether it is a digital graphic or an image-based scanned diagram), you MUST scan it and accurately recreate it using Mermaid.js syntax inside a markdown mermaid block, and add it directly into the generated summary. This is critical for visual learning. DO NOT USE placeholders like [DIAGRAM], USE MERMAID. DO NOT output any text explaining the diagram before or after the Mermaid block.
-      7. COMPARISONS AND DIFFERENCES: Whenever the text discusses differences between concepts or compares multiple things, YOU MUST format these comparisons as Markdown TABLES. YOU MUST provide a minimum of 10 differences/points of comparison whenever possible.
-      
-      Note: Keep Mermaid node labels clean and concise. Each Mermaid statement must be on its own line. DO NOT include any node legends, map keys, or descriptive legend boxes in the diagrams.
+    FOCUS AREA
+    ${focusArea || "General understanding"}
+
+    DOCUMENT SCOPE
+    ${pageScope}
+    This is batch ${batchIndex + 1} of ${batchCount}. It covers source pages ${sourceStart}-${sourceEnd} and writes note pages ${noteStart}-${noteEnd} of a ${targetNotePages}-page set. Analyze every page in this range, in order. Keep units and chapters separate. ${isExtractedTextFallback ? "Only text extracted from the PDF is available. Do not claim to inspect images or diagrams; use only legible extracted text and omit visuals whose content is unavailable." : "The original uploaded document is available for visual inspection; supplementary extracted text, when present, is additional context and must not replace scanned-page inspection."}
+
+    SOURCE-ONLY ACCURACY
+    - Preserve the source's terminology, concepts, examples, formulas, sequence, and meaning.
+    - Correct obvious OCR errors only when the correction is supported by nearby source context. Preserve technical terms.
+    - Never invent definitions, examples, diagrams, advantages, disadvantages, applications, limitations, metadata, or exam facts. Omit details that are not supported by the uploaded document; do not add unavailable-information placeholders.
+    - Cite source traceability where supported: Source: [Book/Document] > Unit [number/name] > Chapter [number/name] > Page [number]. Use the visible printed page number when available; otherwise use the PDF page number. Do not guess missing references.
+    - If multiple books or distinct source works are actually present in the supplied material, identify them separately, combine only related subject matter, preserve useful non-duplicate explanations, and never merge unrelated subjects.
+
+    DOCUMENT STRUCTURE
+    Identify the title, subject, department, units, chapters, subtitles, headings, and subheadings when present. Preserve this hierarchy: Book > Unit > Chapter > Subtitle/Heading. Do not mix content across chapters or units. For a unit completed in this batch, include its unit overview, chapters, main concepts, definitions, key points, examples, diagrams, exam points, and unit summary. For a unit spanning batches, summarize only the covered source range and do not imply the unit is complete.
+
+    CHAPTER STRUCTURE
+    For each chapter represented in this batch, include only the following sections that have useful, source-supported content, in this order. Omit unsupported sections entirely, including their headings. Each chapter should receive approximately two note pages or more only when the source contains enough material; do not force a section or page count with repetition.
+    CHAPTER [NUMBER]: [CHAPTER NAME]
+    Subtitle
+    1. Chapter Introduction
+    2. Chapter Description
+    3. Main Headings
+    4. Heading-wise Explanation
+    5. Key Points
+    6. Important Definitions
+    7. Types / Classification
+    8. Algorithms / Processes
+    9. Examples
+    10. Diagrams
+    11. Tables
+    12. Advantages
+    13. Disadvantages
+    14. Applications
+    15. Limitations
+    16. Important Exam Points
+    17. Chapter Conclusion
+    Include only applicable source-supported content. Do not mention missing requested information.
+
+    CONTENT PRESERVATION
+    - Explain important concepts sufficiently for a student to understand them; do not reduce explanations to bare labels.
+    - Extract every relevant definition, technical term, formula, algorithm, process, example, classification, step, table, and conclusion from this source range.
+    - For algorithms/processes, include the source-supported name, purpose, steps, working, example, and result when available.
+    - For each major heading, give clear, informative key points on separate lines. Use Markdown hyphen bullets and numbered lists for ordered steps.
+    - Recreate source tables faithfully as readable Markdown tables, preserving labels, values, units, and relationships.
+    - Identify diagrams and figures only when they appear in the uploaded document. For each, provide its source title/page, components, relationships or working, and a faithful explanation. Recreate as Mermaid only if the original diagram is legible and its structure can be represented accurately. Never invent, substitute, or add unrelated diagrams; describe an unreadable visual without guessing.
+    - Include advantages, disadvantages, applications, and limitations only when the source discusses them.
+    - Exam points must be grounded in the document's emphasis, definitions, worked problems, summaries, or review material, not an external syllabus.
+
+    LENGTH AND PRESENTATION
+    - Produce up to ${notePagesInBatch} distinct note pages in this batch, separated by the exact marker ---PAGE_BREAK---. Use fewer pages when the source does not support more useful detail. Do not place a marker before the first page or after the last page in this batch.
+    - Write approximately 250-350 words per note page when the source supports that level of detail. Large books may need 20+ pages; use ${targetNotePages} pages as a maximum target, not a quota. Short documents must receive proportionally detailed notes, never padding or placeholder sections.
+    - Use simple English, clear academic language, short paragraphs, and accurate technical terminology.
+    - Use semantic Markdown headings, hyphen bullets, numbered steps, and valid Markdown tables so the web and document renderers can format them. Do not write literal # or * characters as visible heading or bullet symbols.
+    - Preserve equations and symbols. Do not use $ or $$ as math delimiters; write equations in plain-text notation. Retain dollar signs only for literal currency amounts present in the source. Keep Mermaid syntax valid and each statement on its own line when used.
+    - Do not repeat content between pages or batches. Cover the full source range, including examples, captions, and relevant details; do not summarize only the opening pages.
+
+    FINAL BOOK SUMMARY
+    On the final batch only, conclude within the final note page(s) with a concise book-level overview and quick-revision section covering the units and chapters, most important source-grounded topics, definitions, algorithms, diagrams, formulas, and exam points. For this synthesis only, inspect the complete uploaded document; do not repeat detailed chapter notes from other batches or claim content that is not present in the source.
+
+    FINAL VALIDATION
+    Before returning this batch, verify that its assigned source pages were covered, the hierarchy is preserved, important source content is retained, references are not guessed, no unsupported facts or diagrams were added, formatting is consistent, and the requested page breaks are present.
     `;
 
-    try {
+      const contents = await getContentParts(fileUri, mimeType || "application/pdf", prompt);
+      if (isExtractedTextFallback && extractedDocumentText) {
+        const sourceText = hasPageSeparatedText && extractedPages && !isFinalBatch
+          ? extractedPages
+            .slice(sourceStart - 1, sourceEnd)
+            .map((pageText, index) => `[Source page ${sourceStart + index}]\n${pageText.trim()}`)
+            .join("\n\n")
+          : extractedDocumentText;
+        contents[0].parts[0] = {
+          text: `Extracted PDF text${hasPageSeparatedText && !isFinalBatch ? ` for source pages ${sourceStart}-${sourceEnd}` : ""}:\n\n${sourceText}`
+        };
+      } else if (hasPageSeparatedText && extractedPages) {
+        const sourceText = extractedPages
+          .slice(sourceStart - 1, sourceEnd)
+          .map((pageText, index) => `[Source page ${sourceStart + index}]\n${pageText.trim()}`)
+          .join("\n\n");
+        contents[0].parts.unshift({ text: `Supplementary extracted text for source pages ${sourceStart}-${sourceEnd}:\n\n${sourceText}` });
+      }
+
       const response = await generateContentWithFallback(ai, {
         model: "gemini-3.5-flash-lite",
-        contents: await getContentParts(fileUri, mimeType, prompt),
-        config: {
-          maxOutputTokens: 8192,
-        }
-      });
-      return res.json({ result: response.text });
-    } catch (error: any) {
-      console.error("Notes error:", error);
-      const formatted = formatGeminiError(error);
-      const statusCode = (error?.status === 429 || formatted.includes("rate limit") || formatted.includes("wait")) ? 429 : 500;
-      return res.status(statusCode).json({ error: formatted });
+        contents,
+        config: { maxOutputTokens: 8192 },
+      }, excludedModels, true);
+      if (!response.text?.trim()) throw new Error(`No notes were generated for batch ${batchIndex + 1}.`);
+      generatedBatches.push(response.text.trim());
     }
+
+    return res.json({ result: generatedBatches.join("\n---PAGE_BREAK---\n"), pageCount, notesVersion: 3 });
   } catch (error: any) {
     console.error("Notes outer error:", error);
     const formatted = formatGeminiError(error);
-    return res.status(500).json({ error: formatted });
+    const statusCode = error?.status === 429 || formatted.includes("rate limit") || formatted.includes("wait") ? 429 : 500;
+    return res.status(statusCode).json({ error: formatted });
   }
 });
 
@@ -1285,7 +1411,6 @@ app.post("/api/generate-video-explanation", async (req, res) => {
     const { fileUri, mimeType, focusArea } = req.body;
     if (!fileUri) return res.status(400).json({ error: "Missing fileUri" });
     const ai = getGenAI();
-
     const prompt = `
       You are an expert academic tutor and visual lecturer. Analyze the provided study material and generate a comprehensive, highly structured 2-minute to 3-minute video lecture script.
       The output MUST be a JSON object with:
@@ -1321,27 +1446,13 @@ app.post("/api/generate-video-explanation", async (req, res) => {
                   properties: {
                     sceneNumber: { type: Type.INTEGER },
                     visualTitle: { type: Type.STRING },
-                    bullets: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
-                    },
+                    bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
                     narration: { type: Type.STRING },
                     duration: { type: Type.INTEGER },
                     graphicsPrompt: { type: Type.STRING },
-                    highlightKeyTerms: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
-                    }
+                    highlightKeyTerms: { type: Type.ARRAY, items: { type: Type.STRING } }
                   },
-                  required: [
-                    "sceneNumber",
-                    "visualTitle",
-                    "bullets",
-                    "narration",
-                    "duration",
-                    "graphicsPrompt",
-                    "highlightKeyTerms"
-                  ]
+                  required: ["sceneNumber", "visualTitle", "bullets", "narration", "duration", "graphicsPrompt", "highlightKeyTerms"]
                 }
               }
             },
