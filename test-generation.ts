@@ -1,24 +1,35 @@
 import { GoogleGenAI } from "@google/genai";
+import * as dotenv from "dotenv";
+dotenv.config();
 
 async function run() {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const models = [
-    "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-pro", "gemini-3.5-flash",
-    "gemini-2.0-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview", 
-    "gemini-pro-latest"
-  ];
+  const apiKey = process.env.GEMINI_API_KEY;
+  const ai = new GoogleGenAI({ apiKey });
   
-  for (const model of models) {
+  const testModels = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite"
+  ];
+
+  for (const model of testModels) {
+    const start = Date.now();
     try {
-      console.log(`Trying ${model}...`);
       const response = await ai.models.generateContent({
-        model: model,
-        contents: "Say hello!"
+        model,
+        contents: "Generate 1 bullet point summarizing what photosynthesis is."
       });
-      console.log(`${model} SUCCESS! Response: ${response.text}`);
-    } catch(e: any) {
-      console.error(`${model} FAILED: ${e.message}`);
+      const elapsed = Date.now() - start;
+      console.log(`[PASS] ${model} (${elapsed}ms): ${response.text?.trim()}`);
+    } catch (err: any) {
+      const elapsed = Date.now() - start;
+      console.log(`[FAIL] ${model} (${elapsed}ms): ${err.status} - ${err.message?.split('\n')[0]}`);
     }
   }
 }
+
 run();
+

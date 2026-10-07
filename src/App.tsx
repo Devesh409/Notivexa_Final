@@ -1,9 +1,10 @@
 import { Slide } from "./types";
 import { SlidePreviewModal } from "./components/SlidePreviewModal";
+import { PPTTopicStudioModal } from "./components/PPTTopicStudioModal";
 import { UniversityPaperEditor } from "./components/UniversityPaperEditor";
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { motion } from "motion/react";
-import { BookOpen, GraduationCap, Upload, FileText, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail } from "lucide-react";
+import { BookOpen, GraduationCap, Upload, FileText, FileDown, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail, HardDrive, Lightbulb } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -16,9 +17,11 @@ import { doc, setDoc, serverTimestamp, getDoc, collection, addDoc, deleteDoc, qu
 import { VideoExplainer, VideoData } from "./components/VideoExplainer";
 import { UserProfile } from "./components/UserProfile";
 import { AuthForm } from "./components/AuthForm";
+import { MfaSettingsModal } from "./components/MfaSettingsModal";
 import { Chatbot } from "./components/Chatbot";
 import { LibraryPanel, type LibraryBook } from "./components/LibraryPanel";
 import { deleteSavedLibraryBook, getSavedLibraryBookFile, listSavedLibraryBooks, saveLibraryBook, type SavedLibraryBook } from "./components/libraryStorage";
+import { pickBookFromGoogleDrive, prepareGoogleDrivePicker } from "./components/googleDrive";
 
 type Mode = "student";
 
@@ -30,6 +33,23 @@ export const cleanBulletText = (text: string): string => {
     .replace(/^[\s\*\-\+•▪▫❖➔➢✔✓☑●○◘◙◦✓\-]+/g, "")
     .trim();
 };
+
+export const normalizeGeneratedContent = (text: string): string => {
+  if (!text) return "";
+  return text
+    .replace(/\\text\{([^{}]*)\}/g, "$1")
+    .replace(/\\times/g, "×")
+    .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1 / $2")
+    .replace(/\${1,2}/g, "")
+    .replace(/[ \t]+\n/g, "\n");
+};
+
+const normalizeGeneratedFlashcards = (cards: { term: string; definition: string }[] = []) =>
+  cards.map((card) => ({
+    ...card,
+    term: normalizeGeneratedContent(card.term),
+    definition: normalizeGeneratedContent(card.definition),
+  }));
 
 export const splitBullet = (bullet: string): { label: string; desc: string } => {
   if (!bullet) return { label: "", desc: "" };
@@ -284,12 +304,16 @@ function oklchToRgb(oklchStr: string): string {
 }
 
 export default function App() {
+  console.log("App component render started!");
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [mode, setMode] = useState<Mode>("student");
   const [file, setFile] = useState<File | null>(null);
   const [fileData, setFileData] = useState<{fileUri: string, mimeType: string} | null>(null);
   const [loading, setLoading] = useState(false);
+  const [drivePickerReady, setDrivePickerReady] = useState(false);
+  const [drivePickerFailed, setDrivePickerFailed] = useState(false);
+  const [isPickingDrive, setIsPickingDrive] = useState(false);
   const [generatingType, setGeneratingType] = useState<"notes" | "assessment" | "flashcards" | "question-bank" | "lesson-plan" | "video" | "ppt" | "exam-paper" | "">("");
   const [resultText, setResultText] = useState("");
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
@@ -298,9 +322,12 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showMfaModal, setShowMfaModal] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [showPPTStudioModal, setShowPPTStudioModal] = useState(false);
+  const [selectedPPTTopic, setSelectedPPTTopic] = useState("");
   const [pptTheme, setPptTheme] = useState<"academic" | "professional" | "minimalist" | "pastel">("academic");
   const [resultType, setResultType] = useState<"notes" | "assessment" | "question-bank" | "lesson-plan" | "video" | "ppt" | "exam-paper" | "">("");
   const [videoData, setVideoData] = useState<VideoData | null>(null);
@@ -325,6 +352,11 @@ export default function App() {
   const [flashcardThemeStyle, setFlashcardThemeStyle] = useState<"default" | "monochrome" | "pastel" | "high-contrast">("pastel");
   const [pageStyle, setPageStyle] = useState("ruled");
   const [penColor, setPenColor] = useState("blue");
+  const [summaryViewMode, setSummaryViewMode] = useState<"continuous" | "single">("continuous");
+  const setGeneratedResultText = (text: string) => setResultText(normalizeGeneratedContent(text));
+  const setGeneratedFlashcards = (cards: { term: string; definition: string }[] = []) => {
+    setFlashcards(normalizeGeneratedFlashcards(cards));
+  };
   const [isExporting, setIsExporting] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -393,11 +425,47 @@ export default function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (authenticatedUser) => {
-      setUser(authenticatedUser);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
+    let isMounted = true;
+    void prepareGoogleDrivePicker()
+      .then(() => {
+        if (isMounted) setDrivePickerReady(true);
+      })
+      .catch((pickerError) => {
+        console.warn("Could not prepare the Google Drive picker:", pickerError);
+        if (isMounted) setDrivePickerFailed(true);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let resolved = false;
+    const fallbackTimer = setTimeout(() => {
+      if (!resolved) {
+        setAuthLoading(false);
+      }
+    }, 2000);
+
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (authenticatedUser) => {
+        resolved = true;
+        clearTimeout(fallbackTimer);
+        setUser(authenticatedUser);
+        setAuthLoading(false);
+      },
+      (authErr) => {
+        console.warn("Auth initialization warning:", authErr);
+        resolved = true;
+        clearTimeout(fallbackTimer);
+        setAuthLoading(false);
+      }
+    );
+    return () => {
+      clearTimeout(fallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -419,13 +487,53 @@ export default function App() {
   }, [resultText]);
 
   useEffect(() => {
-    notesViewerRef.current?.scrollTo({ top: 0, left: 0 });
-  }, [currentPageIndex]);
+    if (summaryViewMode === "single") {
+      notesViewerRef.current?.scrollTo({ top: 0, left: 0 });
+    }
+  }, [currentPageIndex, summaryViewMode]);
 
-  const resultPages = resultText
+  const displayedResultText = normalizeGeneratedContent(resultText);
+
+  const resultPages = displayedResultText
     .split("---SET_SEPARATOR---")
     .flatMap((setMarkdown) => setMarkdown.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i))
     .filter((pageMarkdown) => pageMarkdown.trim().length > 0);
+
+  const pagesToRender = resultPages.length > 0
+    ? resultPages
+    : (displayedResultText.trim().length > 0 ? [displayedResultText] : []);
+
+  const scrollToSummaryPage = (targetIdx: number) => {
+    const boundedIdx = Math.max(0, Math.min(pagesToRender.length - 1, targetIdx));
+    setCurrentPageIndex(boundedIdx);
+    if (summaryViewMode === "continuous") {
+      const el = document.getElementById(`summary-page-${boundedIdx}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } else {
+      notesViewerRef.current?.scrollTo({ top: 0, left: 0 });
+    }
+  };
+
+  const handleNotesViewerScroll = () => {
+    if (summaryViewMode !== "continuous" || !notesViewerRef.current || pagesToRender.length <= 1) return;
+    const container = notesViewerRef.current;
+    const containerRect = container.getBoundingClientRect();
+
+    for (let i = 0; i < pagesToRender.length; i++) {
+      const el = document.getElementById(`summary-page-${i}`);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= containerRect.top + 200 && rect.bottom >= containerRect.top + 50) {
+          if (currentPageIndex !== i) {
+            setCurrentPageIndex(i);
+          }
+          break;
+        }
+      }
+    }
+  };
 
   const seenActivityKeys = new Set<string>();
   const uniqueHistoryItems = history.filter((item) => {
@@ -549,9 +657,9 @@ export default function App() {
           type: data.type || "notes",
           fileUri: data.fileUri || "",
           mimeType: data.mimeType || "",
-          resultText: data.resultText || "",
+          resultText: normalizeGeneratedContent(data.resultText || ""),
 
-          flashcards: data.flashcards || [],
+          flashcards: normalizeGeneratedFlashcards(data.flashcards || []),
           lessonPlan: data.lessonPlan || null,
           focusArea: data.focusArea || "",
           createdAt: data.createdAt,
@@ -577,13 +685,17 @@ export default function App() {
 
 
     setFileData({ fileUri: item.fileUri, mimeType: item.mimeType });
-    setResultText(item.resultText || "");
+    setGeneratedResultText(item.resultText || "");
     setResultType(item.type as any);
-        setFlashcards(item.flashcards || []);
+        setGeneratedFlashcards(item.flashcards || []);
     setLessonPlan(item.lessonPlan || null);
     setVideoData(item.videoData || null);
     if (item.focusArea) {
       setFocusArea(item.focusArea);
+      setSelectedPPTTopic(item.focusArea);
+    }
+    if (item.slides) {
+      setSlides(item.slides);
     }
 
   };
@@ -819,6 +931,18 @@ This study companion can be uploaded to the study panel to generate notes, asses
     signOut(auth);
   };
 
+  const requestGoogleDriveAccessToken = async () => {
+    const provider = new GoogleAuthProvider();
+    provider.addScope("https://www.googleapis.com/auth/drive.readonly");
+
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error("Google Drive access was not granted.");
+    }
+    return credential.accessToken;
+  };
+
 
 
 
@@ -831,9 +955,9 @@ This study companion can be uploaded to the study panel to generate notes, asses
       window.speechSynthesis.resume();
       setIsSpeechPaused(false);
     } else {
-      if (!resultText) return;
+      if (!displayedResultText) return;
       // Strip markdown using a simple regex
-      const plainText = resultText
+      const plainText = displayedResultText
         .replace(/---PAGE_BREAK---/g, " ")
         .replace(/---SET_SEPARATOR---/g, " ")
         .replace(/[*_#`~>]/g, "")
@@ -871,74 +995,6 @@ This study companion can be uploaded to the study panel to generate notes, asses
     };
   }, [resultText]);
 
-  if (authLoading) {
-    return (
-      <div className={`flex h-screen items-center justify-center transition-colors ${isDarkMode ? "bg-[#181816]" : "bg-[#F5F5F0]"}`}>
-        <Loader2 className={`animate-spin ${isDarkMode ? "text-[#C2C2B0]" : "text-[#5A5A40]"}`} size={40} />
-      </div>);
-  }
-
-
-  if (!user) {
-    return (
-      <div className={`flex min-h-screen items-center justify-center font-sans transition-colors relative overflow-hidden ${isDarkMode ? "bg-[#131311] text-[#E0E0D5]" : "bg-[#FDFDFB] text-[#2D2D2A]"}`}>
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=2400&q=90')] bg-cover bg-center" />
-        <div className={`absolute inset-0 ${isDarkMode ? "bg-gradient-to-br from-[#111827]/75 via-[#172554]/65 to-[#131311]/80" : "bg-gradient-to-br from-slate-900/35 via-sky-950/25 to-slate-900/45"}`} />
-
-        <div className={`p-10 md:p-12 rounded-[32px] border text-center max-w-md w-full relative z-10 transition-colors backdrop-blur-xl ${
-          isDarkMode ? "bg-[#22221F]/90 border-[#383832] shadow-[0_16px_48px_rgba(0,0,0,0.42)]" : "bg-white/90 border-white/75 shadow-[0_16px_48px_rgba(15,23,42,0.2)]"
-        }
-`}>
-          <button
-            onClick={() => setIsDarkMode(!isDarkMode)}
-            title={isDarkMode ? "Switch to Daylight Mode" : "Switch to Late-Night Study Dark Mode"}
-            className={`absolute top-4 right-4 p-2.5 rounded-full border transition-all ${
-              isDarkMode 
-                ? "bg-[#2D2D2A] border-[#4A4A3F] text-[#FACC15] hover:bg-[#383832]" 
-                : "bg-[#FAF9F6] border-[#E0E0D5] text-[#5A5A40] hover:bg-[#E8E8E0]"
-            }
-`}
-          >
-            {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-          <div className="w-20 h-20 mx-auto bg-gradient-to-tr from-sky-500 via-indigo-600 to-violet-600 rounded-[24px] shadow-xl shadow-sky-500/25 text-white flex items-center justify-center mb-6 transform hover:scale-105 transition-all">
-            <BookOpen size={36} />
-          </div>
-          <h1 className={`text-3xl font-bold font-serif mb-2 tracking-tight ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
-            Welcome to <br />Notivexa <span className="bg-gradient-to-r from-sky-500 to-violet-600 bg-clip-text text-transparent">AI</span>
-          </h1>
-          <p className={`mb-8 text-sm leading-relaxed ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-            Sign in to access AI-powered learning tools, generate notes, flashcards, and presentations instantly.
-          </p>
-          <AuthForm isDarkMode={isDarkMode} />
-          
-          <div className="flex items-center my-6 opacity-70">
-            <div className={`flex-1 border-t ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}></div>
-            <div className={`px-4 text-xs font-medium uppercase tracking-wider ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>Or continue with</div>
-            <div className={`flex-1 border-t ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}></div>
-          </div>
-          
-          <button 
-            onClick={handleSignIn}
-            className={`w-full py-3.5 px-6 rounded-xl font-semibold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
-              isDarkMode
-                ? "bg-[#2D2D2A] text-white hover:bg-[#383832] border border-slate-700"
-                : "bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 shadow-sm"
-            }`}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-            </svg>
-            Sign in with Google
-          </button>
-        </div>
-      </div>);
-  }
-
-
   const handleFetchError = (err: any) => {
     console.error(err);
     const msg = err?.message || String(err || "");
@@ -957,10 +1013,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
 
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0]) return;
-    const selectedFile = e.target.files[0];
-    e.currentTarget.value = "";
+  const handleUploadFile = async (selectedFile: File, uploadSource = "Quick Scan") => {
     setFile(selectedFile);
     setLoading(true);
     setError(null);
@@ -1000,7 +1053,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
           await addDoc(collection(db, "users", user.uid, "books"), {
             title: selectedFile.name,
             author: "Uploaded File",
-            desc: "Uploaded via Quick Scan",
+            desc: `Uploaded via ${uploadSource}`,
             department: "General",
             fileUri: data.fileUri,
             mimeType: data.mimeType,
@@ -1021,6 +1074,27 @@ This study companion can be uploaded to the study panel to generate notes, asses
 
   };
 
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.currentTarget.files?.[0];
+    e.currentTarget.value = "";
+    if (selectedFile) await handleUploadFile(selectedFile);
+  };
+
+  const handleDriveUpload = async () => {
+    if (!drivePickerReady || loading || isPickingDrive) return;
+    setIsPickingDrive(true);
+    setError(null);
+    try {
+      const accessToken = await requestGoogleDriveAccessToken();
+      const selectedFile = await pickBookFromGoogleDrive(accessToken);
+      if (selectedFile) await handleUploadFile(selectedFile, "Google Drive");
+    } catch (driveError) {
+      handleFetchError(driveError);
+    } finally {
+      setIsPickingDrive(false);
+    }
+  };
+
 
 
   const generateNotes = async () => {
@@ -1033,7 +1107,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
       const cached = history.find(
         (item) => item.fileUri === fileData.fileUri && item.type === "notes" && item.notesVersion === 3);
       if (cached) {
-        setResultText(cached.resultText || "");
+        setGeneratedResultText(cached.resultText || "");
         setResultType("notes");
                 setFlashcards([]);
         if (cached.focusArea) {
@@ -1064,7 +1138,8 @@ This study companion can be uploaded to the study panel to generate notes, asses
       if (data && data.error) throw new Error(data.error);
       if (!res.ok) throw new Error("Failed to generate notes");
       
-      setResultText(data.result || "");
+      const generatedNotes = normalizeGeneratedContent(data.result || "");
+      setGeneratedResultText(generatedNotes);
       setResultType("notes");
             setFlashcards([]);
 
@@ -1075,7 +1150,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
           notesVersion: data.notesVersion ?? 3,
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          resultText: data.result || "",
+          resultText: generatedNotes,
 
           flashcards: [],
           focusArea: focusArea,
@@ -1104,7 +1179,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
       const cached = history.find(
         (item) => item.fileUri === fileData.fileUri && item.type === "assessment");
       if (cached) {
-        setResultText(cached.resultText || "");
+        setGeneratedResultText(cached.resultText || "");
         setResultType("assessment");
                 setFlashcards([]);
         setLoading(false);
@@ -1131,7 +1206,8 @@ This study companion can be uploaded to the study panel to generate notes, asses
       if (data && data.error) throw new Error(data.error);
       if (!res.ok) throw new Error("Failed to generate assessment");
       
-      setResultText(data.result || "");
+      const generatedAssessment = normalizeGeneratedContent(data.result || "");
+      setGeneratedResultText(generatedAssessment);
       setResultType("assessment");
             setFlashcards([]);
 
@@ -1141,7 +1217,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
           type: "assessment",
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          resultText: data.result || "",
+          resultText: generatedAssessment,
 
           flashcards: [],
           focusArea: focusArea,
@@ -1170,7 +1246,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
       const cached = history.find(
         (item) => item.fileUri === fileData.fileUri && item.type === "question-bank" && item.questionBankType === questionBankType && item.questionBankBloomLevel === questionBankBloomLevel);
       if (cached) {
-        setResultText(cached.resultText || "");
+        setGeneratedResultText(cached.resultText || "");
         setResultType("question-bank");
                 setFlashcards([]);
         setLoading(false);
@@ -1197,7 +1273,8 @@ This study companion can be uploaded to the study panel to generate notes, asses
       if (data && data.error) throw new Error(data.error);
       if (!res.ok) throw new Error("Failed to generate question bank");
       
-      setResultText(data.result || "");
+      const generatedQuestionBank = normalizeGeneratedContent(data.result || "");
+      setGeneratedResultText(generatedQuestionBank);
       setResultType("question-bank");
             setFlashcards([]);
 
@@ -1209,7 +1286,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
           questionBankBloomLevel: questionBankBloomLevel,
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          resultText: data.result || "",
+          resultText: generatedQuestionBank,
 
           flashcards: [],
           focusArea: focusArea,
@@ -1263,8 +1340,11 @@ This study companion can be uploaded to the study panel to generate notes, asses
       const cached = history.find(
         (item) => item.fileUri === fileData.fileUri && item.type === "lesson-plan");
       if (cached && cached.lessonPlan) {
-        setLessonPlan(cached.lessonPlan);
-        setResultText(cached.lessonPlan.fullMarkdownPlan || "");
+        setLessonPlan({
+          ...cached.lessonPlan,
+          fullMarkdownPlan: normalizeGeneratedContent(cached.lessonPlan.fullMarkdownPlan || ""),
+        });
+        setGeneratedResultText(cached.lessonPlan.fullMarkdownPlan || "");
         setResultType("lesson-plan");
                 setFlashcards([]);
         if (cached.focusArea) {
@@ -1301,8 +1381,13 @@ This study companion can be uploaded to the study panel to generate notes, asses
       if (!res.ok) throw new Error("Failed to generate lesson plan");
       
       const plan = data.lessonPlan;
-      setLessonPlan(plan);
-      setResultText(plan.fullMarkdownPlan || "");
+      const generatedLessonPlan = normalizeGeneratedContent(plan.fullMarkdownPlan || "");
+      const normalizedPlan = {
+        ...plan,
+        fullMarkdownPlan: generatedLessonPlan,
+      };
+      setLessonPlan(normalizedPlan);
+      setGeneratedResultText(generatedLessonPlan);
       setResultType("lesson-plan");
             setFlashcards([]);
 
@@ -1312,10 +1397,10 @@ This study companion can be uploaded to the study panel to generate notes, asses
           type: "lesson-plan",
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          resultText: plan.fullMarkdownPlan || "",
+          resultText: generatedLessonPlan,
 
           flashcards: [],
-          lessonPlan: plan,
+          lessonPlan: normalizedPlan,
           focusArea: focusArea,
           createdAt: serverTimestamp()
         });
@@ -1342,7 +1427,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
       const cached = history.find(
         (item) => item.fileUri === fileData.fileUri && item.type === "flashcards");
       if (cached) {
-        setFlashcards(cached.flashcards || []);
+        setGeneratedFlashcards(cached.flashcards || []);
         setCurrentCardIndex(0);
         setIsFlipped(false);
         setResultText("");
@@ -1370,7 +1455,8 @@ This study companion can be uploaded to the study panel to generate notes, asses
       if (data && data.error) throw new Error(data.error);
       if (!res.ok) throw new Error("Failed to generate flashcards");
       
-      setFlashcards(data.flashcards || []);
+      const generatedFlashcards = normalizeGeneratedFlashcards(data.flashcards || []);
+      setGeneratedFlashcards(generatedFlashcards);
       setCurrentCardIndex(0);
       setIsFlipped(false);
       setResultText("");
@@ -1383,7 +1469,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
           mimeType: fileData.mimeType,
           resultText: "",
 
-          flashcards: data.flashcards || [],
+          flashcards: generatedFlashcards,
           focusArea: focusArea,
           createdAt: serverTimestamp()
         });
@@ -1449,47 +1535,112 @@ This study companion can be uploaded to the study panel to generate notes, asses
         slideNumber: { x: "95%", y: "96.5%", color: "888888", fontFace: fontName, fontSize: 10 }
       });
 
-      slides.forEach((slide) => {
+      slides.forEach((slide, sIdx) => {
         const pptSlide = pres.addSlide({ masterName: "MASTER_SLIDE" });
         
-        // Title
+        // 1. Category Tag Pill
+        const tagText = (slide.tag || slide.slideType || "Core Concept").toUpperCase();
+        pptSlide.addText(tagText, {
+          x: 0.6,
+          y: 0.35,
+          w: 8.8,
+          h: 0.28,
+          fontSize: 10,
+          fontFace: fontName,
+          bold: true,
+          color: accentColor,
+        });
+
+        // 2. Slide Title
         pptSlide.addText(slide.title, {
-          x: 0.5,
-          y: 0.4,
-          w: "90%",
-          h: 1.2,
-          fontSize: 44,
+          x: 0.6,
+          y: 0.62,
+          w: 8.8,
+          h: 0.85,
+          fontSize: 26,
           fontFace: fontName,
           bold: true,
           color: titleColor,
-          valign: "middle"
+          valign: "top"
         });
 
-        // Content
+        // 3. Simple & Easy-to-Learn Key Takeaway Banner
+        let currentY = 1.55;
+        if (slide.keyTakeaway) {
+          pptSlide.addShape(pres.ShapeType.roundRect, {
+            x: 0.6,
+            y: currentY,
+            w: 8.8,
+            h: 0.48,
+            fill: { color: "FEF3C7" },
+            line: { color: "F59E0B", width: 1 },
+            rectRadius: 0.08
+          });
+          pptSlide.addText([
+            { text: "KEY TAKEAWAY: ", options: { bold: true, color: "B45309", fontSize: 11, fontFace: fontName } },
+            { text: slide.keyTakeaway, options: { bold: false, color: "78350F", fontSize: 11, fontFace: fontName } }
+          ], {
+            x: 0.75,
+            y: currentY + 0.02,
+            w: 8.5,
+            h: 0.44,
+            valign: "middle"
+          });
+          currentY += 0.60;
+        }
+
+        // 4. Bullet Points
+        const bulletsHeight = slide.example ? 2.3 : 2.9;
         if (slide.bullets && slide.bullets.length > 0) {
           pptSlide.addText(
-            slide.bullets.map(b => ({ text: b, options: { bullet: true, fontSize: 24, fontFace: fontName, color: contentColor, breakLine: true } })),
+            slide.bullets.map(b => ({ 
+              text: b.replace(/\*\*/g, ""), 
+              options: { bullet: true, fontSize: 16, fontFace: fontName, color: contentColor, breakLine: true } 
+            })),
             {
-              x: 0.5,
-              y: 1.8,
-              w: "90%",
-              h: 3.5,
+              x: 0.6,
+              y: currentY,
+              w: 8.8,
+              h: bulletsHeight,
               valign: "top",
-              lineSpacing: 32,
+              lineSpacing: 24,
               margin: [0, 0, 0, 0]
             }
           );
         }
 
-
+        // 5. Real-World Analogy / Example Callout Box
+        if (slide.example) {
+          pptSlide.addShape(pres.ShapeType.roundRect, {
+            x: 0.6,
+            y: 4.65,
+            w: 8.8,
+            h: 0.48,
+            fill: { color: "E0F2FE" },
+            line: { color: "38BDF8", width: 1 },
+            rectRadius: 0.08
+          });
+          pptSlide.addText([
+            { text: "REAL-WORLD ANALOGY: ", options: { bold: true, color: "0369A1", fontSize: 10, fontFace: fontName } },
+            { text: slide.example, options: { bold: false, color: "0C4A6E", fontSize: 10, fontFace: fontName } }
+          ], {
+            x: 0.75,
+            y: 4.67,
+            w: 8.5,
+            h: 0.44,
+            valign: "middle"
+          });
+        }
       });
       
-      pres.writeFile({ fileName: `NotivexaAI_Presentation.pptx` });
+      const safeTopic = (selectedPPTTopic || "Document_Study").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 30);
+      pres.writeFile({ fileName: `Notivexa_${safeTopic}_Presentation.pptx` });
     } catch (error) {
       console.error("Error creating PPTX", error);
       alert("Failed to create PPTX file.");
     }
   };
+
   const generateExamPaper = async () => {
     if (!fileData) return;
     setLoading(true);
@@ -1500,14 +1651,13 @@ This study companion can be uploaded to the study panel to generate notes, asses
       const cached = history.find(
         (item) => item.fileUri === fileData.fileUri && item.type === "question-bank" && item.questionBankType === examPaperType && item.questionBankBloomLevel === questionBankBloomLevel);
       if (cached) {
-        setResultText(cached.resultText || "");
+        setGeneratedResultText(cached.resultText || "");
         setResultType("exam-paper");
-                setFlashcards([]);
+        setGeneratedFlashcards([]);
         setLoading(false);
         setGeneratingType("");
         return;
       }
-
 
       const res = await fetch("/api/generate-question-bank", {
         method: "POST",
@@ -1518,18 +1668,17 @@ This study companion can be uploaded to the study panel to generate notes, asses
       let data;
       try {
         data = JSON.parse(textResponse.trim());
-      }
- catch (e) {
+      } catch (e) {
         if (textResponse.trim().toLowerCase().startsWith("<!doctype html>")) { throw new Error("Server is temporarily unavailable (restarting). Please try again in a few seconds."); } throw new Error(`Server error: ${textResponse.slice(0, 100)}`);
       }
 
-      
       if (data && data.error) throw new Error(data.error);
       if (!res.ok) throw new Error("Failed to generate question bank");
       
-      setResultText(data.result || "");
+      const generatedExamPaper = normalizeGeneratedContent(data.result || "");
+      setGeneratedResultText(generatedExamPaper);
       setResultType("exam-paper");
-            setFlashcards([]);
+      setGeneratedFlashcards([]);
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -1539,41 +1688,44 @@ This study companion can be uploaded to the study panel to generate notes, asses
           questionBankBloomLevel: questionBankBloomLevel,
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          resultText: data.result || "",
-
+          resultText: generatedExamPaper,
           flashcards: [],
           focusArea: focusArea,
           createdAt: serverTimestamp()
         });
       }
-
-    }
- catch (err: any) {
+    } catch (err: any) {
       handleFetchError(err);
-    }
- finally {
+    } finally {
       setLoading(false);
       setGeneratingType("");
     }
-
   };
 
+  const openPPTTopicStudio = () => {
+    if (!fileData) {
+      alert("Please upload or choose a document first to generate presentations based on its topics.");
+      return;
+    }
+    setShowPPTStudioModal(true);
+  };
 
-
-  const generatePPT = async () => {
+  const handleGenerateFromStudio = async ({ topic, slideCount, learningLevel }: { topic: string; slideCount: number; learningLevel: string }) => {
     if (!fileData) return;
     setLoading(true);
     setGeneratingType("ppt");
     setError(null);
+    setSelectedPPTTopic(topic);
 
     try {
-      // Client-side cache check
+      // Check cache for this specific topic and file
       const cached = history.find(
-        (item) => item.fileUri === fileData.fileUri && item.type === "ppt"
+        (item) => item.fileUri === fileData.fileUri && item.type === "ppt" && (item.focusArea === topic || (!item.focusArea && topic === "Complete Document Overview"))
       );
-      if (cached) {
-        setSlides(cached.slides || []);
+      if (cached && cached.slides && cached.slides.length > 0) {
+        setSlides(cached.slides);
         setResultType("ppt");
+        setShowPPTStudioModal(false);
         setLoading(false);
         setGeneratingType("");
         return;
@@ -1585,33 +1737,39 @@ This study companion can be uploaded to the study panel to generate notes, asses
         body: JSON.stringify({
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          focusArea: selectedDept !== "All" ? selectedDept : "",
+          topic: topic,
+          focusArea: topic,
+          slideCount: slideCount || 10,
+          learningLevel: learningLevel || "simple",
         }),
       });
 
       if (!response.ok) {
         const errData = await response.json();
-        throw new Error(errData.error || "Failed to generate PPT");
+        throw new Error(errData.error || "Failed to generate presentation");
       }
 
       const data = await response.json();
-      if (data.ppt && data.ppt.slides) {
+      if (data.ppt && data.ppt.slides && data.ppt.slides.length > 0) {
         setSlides(data.ppt.slides);
         setResultType("ppt");
+        setShowPPTStudioModal(false);
 
         if (user) {
           await addDoc(collection(db, "users", user.uid, "documents"), {
-            title: file ? file.name : "Presentation Slides",
+            title: `${file ? file.name : "Document"} - ${topic}`,
             type: "ppt",
             fileUri: fileData.fileUri,
             mimeType: fileData.mimeType,
             resultText: "",
             flashcards: [],
             slides: data.ppt.slides,
-            focusArea: selectedDept !== "All" ? selectedDept : "",
+            focusArea: topic,
             createdAt: serverTimestamp()
           });
         }
+      } else {
+        throw new Error("No slides returned from the presentation generator. Please try another topic.");
       }
     } catch (err: any) {
       handleFetchError(err);
@@ -1619,6 +1777,10 @@ This study companion can be uploaded to the study panel to generate notes, asses
       setLoading(false);
       setGeneratingType("");
     }
+  };
+
+  const generatePPT = async () => {
+    openPPTTopicStudio();
   };
   const generateVideoExplanation = async () => {
     if (!fileData) return;
@@ -1697,8 +1859,8 @@ This study companion can be uploaded to the study panel to generate notes, asses
 
 
   const downloadMarkdown = () => {
-    if (!resultText) return;
-    const blob = new Blob([resultText], { type: "text/markdown;charset=utf-8" });
+    if (!displayedResultText) return;
+    const blob = new Blob([displayedResultText], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -2228,9 +2390,206 @@ This study companion can be uploaded to the study panel to generate notes, asses
         setExportStatus("");
       }, 800);
     }
-
   };
 
+  const getPageSheetStyle = (): React.CSSProperties => {
+    const isStudent = mode === 'student' && resultType !== 'exam-paper';
+    const base: React.CSSProperties = {
+      width: '210mm',
+      minHeight: '297mm',
+      boxSizing: 'border-box',
+      maxWidth: '100%',
+    };
+    if (!isStudent) return base;
+
+    return {
+      ...base,
+      backgroundImage: pageStyle === 'ruled' 
+        ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
+        : pageStyle === 'box' 
+          ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px), repeating-linear-gradient(90deg, transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
+          : 'none',
+      backgroundAttachment: 'local',
+      lineHeight: '32px',
+      // @ts-ignore
+      '--tw-prose-body': penColor === 'blue' ? '#1d4ed8' : '#3A3A2F',
+      '--tw-prose-headings': '#3A3A2F',
+      '--tw-prose-bold': '#3A3A2F',
+      '--tw-prose-th-borders': penColor === 'blue' ? 'rgba(29, 78, 216, 0.3)' : 'rgba(58, 58, 47, 0.3)',
+      '--tw-prose-td-borders': penColor === 'blue' ? 'rgba(29, 78, 216, 0.2)' : 'rgba(58, 58, 47, 0.2)',
+      color: penColor === 'blue' ? '#1d4ed8' : '#3A3A2F',
+    };
+  };
+
+  const markdownComponents = useMemo(() => ({
+    table: ({ node, ...props }: any) => (
+      <div className="overflow-x-auto my-4 w-full">
+        <table className={`w-full border-collapse ${(mode === 'student' && resultType !== 'exam-paper') ? `border-2 border-opacity-20 ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} />
+      </div>
+    ),
+    th: ({ node, ...props }: any) => (
+      <th className={`p-2 text-left ${(mode === 'student' && resultType !== 'exam-paper') ? `border-b-2 border-opacity-20 bg-transparent font-bold text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black bg-gray-200'}`} {...props} />
+    ),
+    td: ({ node, ...props }: any) => (
+      <td className={`p-2 ${(mode === 'student' && resultType !== 'exam-paper') ? `border-b border-opacity-20 text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} />
+    ),
+    li: ({ node, ...props }: any) => (
+      <li className={`mb-2 ${(mode === 'student' && resultType !== 'exam-paper') ? `text-inherit ${handwritingFont}` : 'text-blue-600'}`} {...props} />
+    ),
+    h1: ({ children }: any) => (
+      <h1 className="text-4xl md:text-5xl mt-10 mb-6 font-extrabold !text-black leading-tight tracking-tight">{children}</h1>
+    ),
+    h2: ({ children }: any) => (
+      <h2 className="text-3xl md:text-4xl mt-8 mb-5 font-bold !text-black leading-snug tracking-tight">{children}</h2>
+    ),
+    h3: ({ children }: any) => (
+      <h3 className="text-2xl mt-6 mb-4 font-bold !text-black">{children}</h3>
+    ),
+    h4: ({ children }: any) => (
+      <h4 className="font-bold !text-black">{children}</h4>
+    ),
+    h5: ({ children }: any) => (
+      <h5 className="font-bold !text-black">{children}</h5>
+    ),
+    h6: ({ children }: any) => (
+      <h6 className="font-bold !text-black">{children}</h6>
+    ),
+    strong: ({ children }: any) => (
+      <strong className={(mode === 'student' && resultType !== 'exam-paper') ? 'font-bold text-inherit' : 'font-bold !text-black'}>{children}</strong>
+    ),
+    em: ({ children }: any) => (
+      <em className={(mode === 'student' && resultType !== 'exam-paper') ? 'text-inherit' : 'text-blue-600'}>{children}</em>
+    ),
+    pre({ node, children, ...props }: any) {
+      return (
+        <pre {...props} className={`${props.className || ''} ${(mode === 'student' && resultType !== 'exam-paper') ? 'bg-[#F9F9F7] border border-[#E0E0D5] rounded p-4' : 'bg-gray-100 p-2'}`}>
+          {children}
+        </pre>
+      );
+    },
+    code({ node, inline, className, children, ...props }: any) {
+      const match = /language-(\w+)/.exec(className || '');
+      if (!inline && match && match[1] === 'mermaid') {
+        const chartText = String(children).replace(/\n$/, '');
+        const isMermaid = /^\s*(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|gitGraph|journey|quadrantChart|xychart|requirement|C4|mindmap|timeline|block|packet|architecture|kanban|sankey)/i.test(chartText);
+        if (isMermaid) {
+          return <MermaidChart chart={chartText} handwritingFont={handwritingFont} mode={mode} penColor={penColor} />;
+        }
+      }
+
+      return (
+        <code className={`${className} ${(mode === 'student' && resultType !== 'exam-paper') && !inline ? `${handwritingFont} text-lg` : ''}`} {...props}>
+          {children}
+        </code>
+      );
+    },
+    p: ({ node, children, ...props }: any) => {
+      const isStudent = mode === 'student' && resultType !== 'exam-paper';
+      const pClass = `mb-4 ${isStudent ? `text-inherit ${handwritingFont}` : 'text-blue-600'}`;
+      const content = String(children);
+      if (content.includes("[DIAGRAM:")) {
+        const match = content.match(/\[DIAGRAM:(.*?)\]/);
+        const label = match ? match[1].trim() : "Diagram Placeholder";
+        return (
+          <div className="my-10 border border-[#D1D1C4] rounded-2xl p-10 flex flex-col items-center justify-center bg-white shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] min-h-[250px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-[#5A5A40] opacity-20"></div>
+            <span className="bg-[#FAF9F6] text-[#8A8A7A] px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] mb-4 border border-[#E0E0D5]">Missing Diagram</span>
+            <span className="text-[#3A3A2F] font-serif text-xl text-center max-w-md leading-snug">{label}</span>
+            <p className="text-[#A1A194] font-sans text-xs mt-4 text-center">Gemini could not automatically extract this diagram as Mermaid code.</p>
+          </div>
+        );
+      }
+
+      if (/^Q\d+\.\s+/.test(content) && content.includes("Correct Answer:")) {
+        const parts = content.split(/(A\)\s+|B\)\s+|C\)\s+|D\)\s+|Correct Answer:)/);
+        return (
+          <p className="whitespace-pre-wrap">
+            {parts.map((part, i) => {
+              if (part.startsWith('A)') || part.startsWith('B)') || part.startsWith('C)') || part.startsWith('D)')) {
+                return <span key={i} className="block">{part}</span>;
+              }
+              if (part.startsWith('Correct Answer:')) {
+                return <strong key={i} className="block text-black mt-2">{part}</strong>;
+              }
+              return <strong key={i} className="block text-black font-bold">{part}</strong>;
+            })}
+          </p>
+        );
+      }
+
+      if (typeof children === 'string' && children.includes('?')) {
+        return <p className="font-bold text-black">{children}</p>;
+      }
+
+      return <p className={pClass} {...props}>{children}</p>;
+    }
+  }), [mode, resultType, penColor, handwritingFont]);
+
+  if (authLoading) {
+    return (
+      <div className={`flex h-screen items-center justify-center transition-colors ${isDarkMode ? "bg-[#181816]" : "bg-[#F5F5F0]"}`}>
+        <Loader2 className={`animate-spin ${isDarkMode ? "text-[#C2C2B0]" : "text-[#5A5A40]"}`} size={40} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={`flex min-h-screen items-center justify-center font-sans transition-colors relative overflow-hidden ${isDarkMode ? "bg-[#131311] text-[#E0E0D5]" : "bg-[#FDFDFB] text-[#2D2D2A]"}`}>
+        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=2400&q=90')] bg-cover bg-center" />
+        <div className={`absolute inset-0 ${isDarkMode ? "bg-gradient-to-br from-[#111827]/75 via-[#172554]/65 to-[#131311]/80" : "bg-gradient-to-br from-slate-900/35 via-sky-950/25 to-slate-900/45"}`} />
+
+        <div className={`p-10 md:p-12 rounded-[32px] border text-center max-w-md w-full relative z-10 transition-colors backdrop-blur-xl ${
+          isDarkMode ? "bg-[#22221F]/90 border-[#383832] shadow-[0_16px_48px_rgba(0,0,0,0.42)]" : "bg-white/90 border-white/75 shadow-[0_16px_48px_rgba(15,23,42,0.2)]"
+        }`}>
+          <button
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            title={isDarkMode ? "Switch to Daylight Mode" : "Switch to Late-Night Study Dark Mode"}
+            className={`absolute top-4 right-4 p-2.5 rounded-full border transition-all ${
+              isDarkMode 
+                ? "bg-[#2D2D2A] border-[#4A4A3F] text-[#FACC15] hover:bg-[#383832]" 
+                : "bg-[#FAF9F6] border-[#E0E0D5] text-[#5A5A40] hover:bg-[#E8E8E0]"
+            }`}
+          >
+            {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <div className="w-20 h-20 mx-auto bg-gradient-to-tr from-sky-500 via-indigo-600 to-violet-600 rounded-[24px] shadow-xl shadow-sky-500/25 text-white flex items-center justify-center mb-6 transform hover:scale-105 transition-all">
+            <BookOpen size={36} />
+          </div>
+          <h1 className={`text-3xl font-bold font-serif mb-2 tracking-tight ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
+            Welcome to <br />Notivexa <span className="bg-gradient-to-r from-sky-500 to-violet-600 bg-clip-text text-transparent">AI</span>
+          </h1>
+          <p className={`mb-8 text-sm leading-relaxed ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+            Sign in to access AI-powered learning tools, generate notes, flashcards, and presentations instantly.
+          </p>
+          <AuthForm isDarkMode={isDarkMode} />
+          
+          <div className="flex items-center my-6 opacity-70">
+            <div className={`flex-1 border-t ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}></div>
+            <div className={`px-4 text-xs font-medium uppercase tracking-wider ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>Or continue with</div>
+            <div className={`flex-1 border-t ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}></div>
+          </div>
+          
+          <button 
+            onClick={handleSignIn}
+            className={`w-full py-3.5 px-6 rounded-xl font-semibold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
+              isDarkMode
+                ? "bg-[#2D2D2A] text-white hover:bg-[#383832] border border-slate-700"
+                : "bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 shadow-sm"
+            }`}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`relative isolate grid h-screen ${isSidebarOpen ? "grid-cols-[18rem_minmax(0,1fr)]" : "grid-cols-1"} grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden p-3 font-sans transition-colors duration-300 ${isDarkMode ? "bg-[#131311] text-[#E0E0D5] dark" : "bg-gradient-to-br from-[#dcebf1] via-[#eaf1f7] to-[#e5eaf4] text-slate-800"}`}>
@@ -2418,7 +2777,12 @@ This study companion can be uploaded to the study panel to generate notes, asses
           >
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-          <UserProfile user={user} isDarkMode={isDarkMode} onSignOut={handleSignOut} />
+          <UserProfile 
+            user={user} 
+            isDarkMode={isDarkMode} 
+            onSignOut={handleSignOut} 
+            onOpenMfa={() => setShowMfaModal(true)} 
+          />
         </div>
       </header>
 
@@ -2500,6 +2864,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
 
             {/* Tab Contents */}
             {inputType === "upload" && (
+              <div className="space-y-2">
               <div className="flex items-stretch gap-2">
               <label className={`min-w-0 flex-1 border-2 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-colors group ${
                 isDarkMode 
@@ -2529,6 +2894,18 @@ This study companion can be uploaded to the study panel to generate notes, asses
                   <Trash2 size={16} />
                 </button>
               )}
+              </div>
+              <button
+                type="button"
+                onClick={handleDriveUpload}
+                disabled={!drivePickerReady || loading || isPickingDrive}
+                aria-label="Choose a book from Google Drive"
+                className={`flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-xs font-semibold transition-colors disabled:cursor-wait disabled:opacity-60 ${isDarkMode ? "border-[#4A4A3F] bg-[#22221F] text-[#E0E0D5] hover:bg-[#2A2A26]" : "border-slate-200 bg-white text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"}`}
+              >
+                {isPickingDrive ? <Loader2 size={15} className="animate-spin" /> : <HardDrive size={15} />}
+                {isPickingDrive ? "Connecting to Google Drive…" : drivePickerFailed ? "Google Drive unavailable" : drivePickerReady ? "Choose from Google Drive" : "Preparing Google Drive…"}
+              </button>
+              {drivePickerFailed && <p className="text-[10px] text-amber-700 dark:text-amber-300">Could not load Google Drive. Refresh the page and try again.</p>}
               </div>)}
 
             {false && (
@@ -3131,32 +3508,51 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           {slides.length > 0 && (
             <div className="relative overflow-hidden rounded-[24px] border border-white/80 bg-white/85 shadow-[0_16px_48px_rgba(37,99,235,0.10)] backdrop-blur-xl">
               <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-pink-500 via-rose-600 to-pink-600"></div>
-              <div className="border-b border-[#E0E0D5] p-6 flex items-center justify-between">
-                <h3 className="font-serif text-2xl text-[#3A3A2F]">
-                  Presentation Generated
-                </h3>
-                <div className="flex gap-2">
+              <div className="border-b border-[#E0E0D5] p-5 md:p-6 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-pink-100 dark:bg-pink-950/50 text-pink-700 dark:text-pink-300 border border-pink-200">
+                      {slides.length} Slides • Easy-to-Learn Deck
+                    </span>
+                    {selectedPPTTopic && (
+                      <span className="text-[11px] font-semibold text-slate-500 truncate max-w-xs">
+                        Topic: {selectedPPTTopic}
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="font-serif text-2xl font-bold text-[#3A3A2F]">
+                    {selectedPPTTopic ? `Topic Presentation: ${selectedPPTTopic}` : "Study Presentation"}
+                  </h3>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                   <select 
                     value={pptTheme}
                     onChange={(e) => setPptTheme(e.target.value as any)}
-                    className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 outline-none"
+                    className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 outline-none shadow-2xs"
                   >
                     <option value="academic">Academic Theme</option>
                     <option value="professional">Professional Theme</option>
                     <option value="minimalist">Minimalist Theme</option>
                     <option value="pastel">Soft Pastel</option>
                   </select>
+                  <button
+                    onClick={openPPTTopicStudio}
+                    className="flex items-center gap-1.5 border border-pink-200 bg-pink-50 hover:bg-pink-100 text-pink-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                    title="Change topic or configure presentation parameters"
+                  >
+                    <Sparkles size={14} className="text-pink-600" /> Change Topic / New Deck
+                  </button>
                   <button 
                     onClick={() => setShowPreviewModal(true)}
-                    className="flex items-center gap-2 bg-pink-100 text-pink-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-pink-200 transition-colors"
+                    className="flex items-center gap-1.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-sm shadow-pink-500/20 cursor-pointer"
                   >
-                    <Presentation size={16} /> Preview Slides
+                    <Presentation size={15} /> Preview Slides
                   </button>
                   <button 
                     onClick={downloadPPT}
-                    className="flex items-center gap-2 bg-[#5A5A40] text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-opacity-90 transition-colors"
+                    className="flex items-center gap-1.5 bg-[#5A5A40] text-white px-3.5 py-2 rounded-xl text-xs font-bold hover:bg-opacity-90 transition-colors shadow-sm cursor-pointer"
                   >
-                    <Download size={16} /> Download PPTX
+                    <Download size={15} /> Download PPTX
                   </button>
                   <button 
                     onClick={() => {
@@ -3164,31 +3560,83 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       setResultType("");
                     }} 
                     className="text-[#8A8A7A] hover:bg-[#F5F5F0] p-2 rounded-xl transition-colors"
+                    title="Close Presentation"
                   >
-                    <X size={20} />
+                    <X size={18} />
                   </button>
                 </div>
               </div>
-              <div className="p-8">
-                <p className="text-gray-600 mb-6">Generated {slides.length} slides successfully. Click the download button above to get your presentation.</p>
+              <div className="p-6 md:p-8">
+                <div className="mb-6 flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-pink-50/70 via-rose-50/50 to-pink-50/70 border border-pink-100 text-slate-700">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-pink-500 text-white flex items-center justify-center shadow-sm shrink-0">
+                      <Presentation size={20} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-pink-900">
+                        Educational Presentation grounded in {file ? file.name : 'uploaded document'}
+                      </p>
+                      <p className="text-[11px] text-pink-700/80">
+                        Targeted topic: <span className="font-semibold text-pink-950">{selectedPPTTopic || 'Document Core Concepts'}</span>. Formatted with key takeaways and simple analogies for high-speed retention.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={openPPTTopicStudio}
+                    className="text-xs font-bold text-pink-700 hover:text-pink-900 underline underline-offset-2 shrink-0 cursor-pointer"
+                  >
+                    Select a different topic →
+                  </button>
+                </div>
                 
-                <div className="space-y-6">
-                  {slides.slice(0, 5).map((slide, idx) => (
-                    <div key={idx} className="border border-slate-200 rounded-xl p-6 bg-slate-50">
-                      <div className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Slide {idx + 1} • {slide.slideType}</div>
-                      <h4 className="font-bold text-lg text-slate-800 mb-3">{slide.title}</h4>
-                      <ul className="list-disc pl-5 space-y-1 text-slate-600">
-                        {slide.bullets?.map((b, bIdx) => (
-                          <li key={bIdx}>{b}</li>
-                        ))}
-                      </ul>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {slides.map((slide, idx) => (
+                    <div key={idx} className="border border-slate-200/90 rounded-2xl p-5 bg-white shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[10px] font-bold text-pink-600 bg-pink-50 border border-pink-100 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                            Slide {idx + 1} • {slide.tag || slide.slideType || "Concept"}
+                          </span>
+                        </div>
+                        <h4 className="font-bold text-base text-slate-900 mb-2.5 leading-snug">{slide.title}</h4>
+                        
+                        {slide.keyTakeaway && (
+                          <div className="mb-3 rounded-xl bg-amber-50 border border-amber-200/80 p-2.5 px-3 flex items-start gap-2 shadow-2xs">
+                            <Lightbulb size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                            <p className="text-xs text-amber-950 leading-tight">
+                              <strong className="text-[10px] uppercase tracking-wider text-amber-700 block">Key Takeaway:</strong>
+                              {slide.keyTakeaway}
+                            </p>
+                          </div>
+                        )}
+
+                        <ul className="space-y-1.5 text-xs text-slate-600">
+                          {slide.bullets?.map((b, bIdx) => {
+                            const boldMatch = b.match(/^\s*\*\*(.*?)\*\*\s*[:\-]?\s*(.*)/);
+                            return (
+                              <li key={bIdx} className="flex items-start gap-2 leading-relaxed">
+                                <span className="text-pink-500 font-bold shrink-0">•</span>
+                                {boldMatch ? (
+                                  <span>
+                                    <strong className="text-slate-900 font-semibold">{boldMatch[1]}</strong>: {boldMatch[2]}
+                                  </span>
+                                ) : (
+                                  <span>{b.replace(/\*\*/g, '')}</span>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+
+                      {slide.example && (
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-start gap-1.5 text-[11px] text-sky-900">
+                          <Sparkles size={13} className="text-sky-600 shrink-0 mt-0.5" />
+                          <span><strong className="text-sky-800">Analogy:</strong> {slide.example}</span>
+                        </div>
+                      )}
                     </div>
                   ))}
-                  {slides.length > 5 && (
-                    <div className="text-center text-slate-500 italic p-4 border border-dashed border-slate-300 rounded-xl">
-                      ...and {slides.length - 5} more slides. Download the PPTX to see them all.
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -3196,118 +3644,167 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           {resultText && (
             <div className="relative overflow-hidden rounded-[24px] border border-white/80 bg-white/85 shadow-[0_16px_48px_rgba(37,99,235,0.10)] backdrop-blur-xl">
               <div className="absolute top-0 left-0 z-10 w-full h-1.5 bg-gradient-to-r from-sky-500 via-indigo-600 to-violet-600"></div>
-              <div className="relative z-10 border-b border-[#E0E0D5] p-6 flex flex-wrap items-center justify-between gap-3">
-                <h3 className="font-serif text-2xl text-[#3A3A2F]">
-                  {resultType === "lesson-plan" ? "Study Lesson Planner" : resultType === "question-bank" ? "Study Question Bank" : resultType === "assessment" ? "Assessment Paper" : "Chapter-wise Summary"}
-                </h3>
-                {true && (
-                  <div className="flex flex-wrap items-center gap-2">
-{ (
-                      <>
-                        {resultPages.length > 1 && (
-                          <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white/90 p-1 shadow-sm">
-                            <button
-                              type="button"
-                              onClick={() => setCurrentPageIndex((page) => Math.max(0, page - 1))}
-                              disabled={currentPageIndex === 0}
-                              aria-label="Previous page"
-                              className="flex h-8 w-8 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <ChevronLeft size={16} />
-                            </button>
-                            <span className="min-w-[72px] text-center text-xs font-semibold text-slate-700" aria-live="polite">
-                              Page {currentPageIndex + 1} of {resultPages.length}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setCurrentPageIndex((page) => Math.min(resultPages.length - 1, page + 1))}
-                              disabled={currentPageIndex >= resultPages.length - 1}
-                              aria-label="Next page"
-                              className="flex h-8 w-8 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <ChevronRight size={16} />
-                            </button>
-                          </div>
-                        )}
-                        <select
-                          value={pageStyle ?? "ruled"}
-                          onChange={(e) => setPageStyle(e.target.value)}
-                          className="border border-[#5A5A40] text-[#5A5A40] bg-transparent hover:bg-[#FAF9F6] py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-widest outline-none cursor-pointer transition-colors"
-                        >
-                          <option value="plain">Plain Page</option>
-                          <option value="ruled">Ruled Page</option>
-                          <option value="box">Box Page</option>
-                        </select>
-                        <select
-                          value={penColor ?? "blue"}
-                          onChange={(e) => setPenColor(e.target.value)}
-                          className="border border-[#5A5A40] text-[#5A5A40] bg-transparent hover:bg-[#FAF9F6] py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-widest outline-none cursor-pointer transition-colors"
-                        >
-                          <option value="black">Black Pen</option>
-                          <option value="blue">Blue Pen</option>
-                        </select>
-                        <select
-                          value={handwritingFont ?? "font-handwriting"}
-                          onChange={(e) => setHandwritingFont(e.target.value)}
-                          className="border border-[#5A5A40] text-[#5A5A40] bg-transparent hover:bg-[#FAF9F6] py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-widest outline-none cursor-pointer transition-colors"
-                        >
-                          <option value="font-handwriting">Caveat</option>
-                          <option value="font-handwriting-indie">Indie Flower</option>
-                          <option value="font-handwriting-kalam">Kalam</option>
-                          <option value="font-handwriting-shadows">Shadows</option>
-                          <option value="font-handwriting-patrick">Patrick</option>
-                        </select>
-                      </>)}
-                    <div className="flex items-center gap-2">
-                      {resultText && (
-                        <div className="flex items-center gap-1 bg-white/50 border border-[#D1D1C4] rounded-full p-1 shadow-sm mr-2">
-                          <button
-                            onClick={handlePlayPauseSpeech}
-                            className={`p-1.5 rounded-full transition-colors ${isSpeaking && !isSpeechPaused ? 'bg-[#5A5A40] text-white' : 'text-[#5A5A40] hover:bg-[#F0F0E8]'}`}
-                            title={isSpeaking && !isSpeechPaused ? "Pause Audio" : "Play Audio"}
-                          >
-                            {isSpeaking && !isSpeechPaused ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill={isSpeaking && isSpeechPaused ? "currentColor" : "none"} />}
-                          </button>
-                          {(isSpeaking || isSpeechPaused) && (
-                            <button
-                              onClick={handleStopSpeech}
-                              className="p-1.5 rounded-full transition-colors text-red-500 hover:bg-red-50"
-                              title="Stop Audio"
-                            >
-                              <Square size={14} fill="currentColor" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowExportMenu(!showExportMenu)}
-                        disabled={isExporting}
-                        className="border border-[#5A5A40] bg-[#5A5A40] text-white hover:bg-opacity-90 disabled:opacity-50 disabled:cursor-not-allowed py-2 px-4 rounded-full text-xs font-semibold uppercase tracking-widest transition-colors flex items-center gap-2"
-                      >
-                        {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} 
-                        {isExporting ? 'Exporting...' : 'Export'}
-                        <ChevronDown size={14} />
-                      </button>
-                      {showExportMenu && (
-                        <div className={`absolute right-0 mt-2 w-48 rounded-lg shadow-xl border z-50 overflow-hidden ${isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-white border-slate-200"}`}>
-                          <button onClick={() => { setShowExportMenu(false); downloadHandwrittenPDF(false); }} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider transition-colors ${isDarkMode ? "hover:bg-[#383832] text-[#E0E0D5]" : "hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
-                            <FileText size={14} /> High-Quality PDF
-                          </button>
-                          <button onClick={() => { setShowExportMenu(false); downloadHandwrittenPDF(true); }} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider transition-colors ${isDarkMode ? "hover:bg-[#383832] text-[#E0E0D5]" : "hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
-                            <FileText size={14} /> Fast Export PDF
-                          </button>
-                          <button onClick={downloadDoc} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider border-t transition-colors ${isDarkMode ? "border-[#383832] hover:bg-[#383832] text-[#E0E0D5]" : "border-slate-100 hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
-                            <FileText size={14} /> Word (DOC)
-                          </button>
-                          <button onClick={downloadMarkdown} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider border-t transition-colors ${isDarkMode ? "border-[#383832] hover:bg-[#383832] text-[#E0E0D5]" : "border-slate-100 hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
-                            <FileText size={14} /> Markdown
-                          </button>
-                        </div>)}
-                    </div>
-                    </div>
-                  </div>)}
+              <div className="relative z-10 border-b border-[#E0E0D5] p-4 sm:p-6 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-serif text-2xl text-[#3A3A2F]">
+                    {resultType === "lesson-plan" ? "Study Lesson Planner" : resultType === "question-bank" ? "Study Question Bank" : resultType === "assessment" ? "Assessment Paper" : "Chapter-wise Summary"}
+                  </h3>
+                  {pagesToRender.length > 0 && (
+                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/70">
+                      {pagesToRender.length} {pagesToRender.length === 1 ? 'Page' : 'Pages'}
+                    </span>
+                  )}
+                </div>
 
+                <div className="flex flex-wrap items-center gap-2">
+                  {pagesToRender.length > 1 && (
+                    <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white/90 p-1 shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => scrollToSummaryPage(currentPageIndex - 1)}
+                        disabled={currentPageIndex === 0}
+                        aria-label="Previous page"
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <span className="min-w-[76px] text-center text-xs font-semibold text-slate-700" aria-live="polite">
+                        Page {currentPageIndex + 1} of {pagesToRender.length}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => scrollToSummaryPage(currentPageIndex + 1)}
+                        disabled={currentPageIndex >= pagesToRender.length - 1}
+                        aria-label="Next page"
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
+
+                  {pagesToRender.length > 1 && (
+                    <div className="flex items-center rounded-full border border-slate-200 bg-white p-0.5 shadow-sm text-xs font-medium text-slate-600">
+                      <button
+                        type="button"
+                        onClick={() => setSummaryViewMode("continuous")}
+                        className={`px-3 py-1.5 rounded-full transition-all ${summaryViewMode === "continuous" ? "bg-[#5A5A40] text-white shadow-xs font-semibold" : "hover:text-slate-900"}`}
+                        title="View all pages one by one following each other"
+                      >
+                        Continuous (All)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSummaryViewMode("single")}
+                        className={`px-3 py-1.5 rounded-full transition-all ${summaryViewMode === "single" ? "bg-[#5A5A40] text-white shadow-xs font-semibold" : "hover:text-slate-900"}`}
+                        title="View one page at a time"
+                      >
+                        Single Page
+                      </button>
+                    </div>
+                  )}
+
+                  <select
+                    value={pageStyle ?? "ruled"}
+                    onChange={(e) => setPageStyle(e.target.value)}
+                    className="border border-[#5A5A40] text-[#5A5A40] bg-transparent hover:bg-[#FAF9F6] py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-widest outline-none cursor-pointer transition-colors"
+                  >
+                    <option value="plain">Plain Page</option>
+                    <option value="ruled">Ruled Page</option>
+                    <option value="box">Box Page</option>
+                  </select>
+                  <select
+                    value={penColor ?? "blue"}
+                    onChange={(e) => setPenColor(e.target.value)}
+                    className="border border-[#5A5A40] text-[#5A5A40] bg-transparent hover:bg-[#FAF9F6] py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-widest outline-none cursor-pointer transition-colors"
+                  >
+                    <option value="black">Black Pen</option>
+                    <option value="blue">Blue Pen</option>
+                  </select>
+                  <select
+                    value={handwritingFont ?? "font-handwriting"}
+                    onChange={(e) => setHandwritingFont(e.target.value)}
+                    className="border border-[#5A5A40] text-[#5A5A40] bg-transparent hover:bg-[#FAF9F6] py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-widest outline-none cursor-pointer transition-colors"
+                  >
+                    <option value="font-handwriting">Caveat</option>
+                    <option value="font-handwriting-indie">Indie Flower</option>
+                    <option value="font-handwriting-kalam">Kalam</option>
+                    <option value="font-handwriting-shadows">Shadows</option>
+                    <option value="font-handwriting-patrick">Patrick</option>
+                  </select>
+
+                  {resultText && (
+                    <div className="flex items-center gap-1 bg-white/50 border border-[#D1D1C4] rounded-full p-1 shadow-sm mr-1">
+                      <button
+                        onClick={handlePlayPauseSpeech}
+                        className={`p-1.5 rounded-full transition-colors ${isSpeaking && !isSpeechPaused ? 'bg-[#5A5A40] text-white' : 'text-[#5A5A40] hover:bg-[#F0F0E8]'}`}
+                        title={isSpeaking && !isSpeechPaused ? "Pause Audio" : "Play Audio"}
+                      >
+                        {isSpeaking && !isSpeechPaused ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill={isSpeaking && isSpeechPaused ? "currentColor" : "none"} />}
+                      </button>
+                      {(isSpeaking || isSpeechPaused) && (
+                        <button
+                          onClick={handleStopSpeech}
+                          className="p-1.5 rounded-full transition-colors text-red-500 hover:bg-red-50"
+                          title="Stop Audio"
+                        >
+                          <Square size={14} fill="currentColor" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* DIRECT HIGH-QUALITY PDF DOWNLOAD BUTTON UP IN TOOLBAR */}
+                  <button
+                    type="button"
+                    onClick={() => downloadHandwrittenPDF(false)}
+                    disabled={isExporting}
+                    className="flex items-center gap-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-xs py-2 px-4 rounded-full shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95 cursor-pointer"
+                    title="Download complete high-quality handwritten PDF"
+                  >
+                    {isExporting ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin text-white" />
+                        <span>Exporting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileDown size={14} className="text-white" />
+                        <span>Download PDF</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* MORE EXPORT OPTIONS DROPDOWN */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowExportMenu(!showExportMenu)}
+                      disabled={isExporting}
+                      className="border border-[#D1D1C4] bg-white text-[#5A5A40] hover:bg-[#FAF9F6] disabled:opacity-50 disabled:cursor-not-allowed py-2 px-3 rounded-full text-xs font-semibold uppercase tracking-wider transition-colors flex items-center gap-1.5 shadow-2xs"
+                      title="More export options"
+                    >
+                      <span>More</span>
+                      <ChevronDown size={14} />
+                    </button>
+                    {showExportMenu && (
+                      <div className={`absolute right-0 mt-2 w-48 rounded-lg shadow-xl border z-50 overflow-hidden ${isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-white border-slate-200"}`}>
+                        <button onClick={() => { setShowExportMenu(false); downloadHandwrittenPDF(false); }} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider transition-colors ${isDarkMode ? "hover:bg-[#383832] text-[#E0E0D5]" : "hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
+                          <FileText size={14} /> High-Quality PDF
+                        </button>
+                        <button onClick={() => { setShowExportMenu(false); downloadHandwrittenPDF(true); }} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider transition-colors ${isDarkMode ? "hover:bg-[#383832] text-[#E0E0D5]" : "hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
+                          <FileText size={14} /> Fast Export PDF
+                        </button>
+                        <button onClick={downloadDoc} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider border-t transition-colors ${isDarkMode ? "border-[#383832] hover:bg-[#383832] text-[#E0E0D5]" : "border-slate-100 hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
+                          <FileText size={14} /> Word (DOC)
+                        </button>
+                        <button onClick={downloadMarkdown} className={`w-full text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider border-t transition-colors ${isDarkMode ? "border-[#383832] hover:bg-[#383832] text-[#E0E0D5]" : "border-slate-100 hover:bg-slate-50 text-slate-700"} flex items-center gap-2`}>
+                          <FileText size={14} /> Markdown
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
               
               <div
@@ -3315,7 +3812,8 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                 role="region"
                 aria-label="Summary page viewer"
                 tabIndex={0}
-                className="relative z-10 max-h-[80vh] overflow-auto p-4 sm:p-8"
+                onScroll={handleNotesViewerScroll}
+                className="relative z-10 max-h-[82vh] overflow-auto p-4 sm:p-8 bg-slate-100/60"
               >
                 {/* 
                   Applying a handwriting font class when in student mode.
@@ -3323,7 +3821,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                 {resultType === "exam-paper" && examPaperType === "paper-university" && (
                   (() => {
                     try {
-                      let cleanedText = resultText.trim();
+                      let cleanedText = displayedResultText.trim();
                       if (cleanedText.startsWith("```json")) {
                         cleanedText = cleanedText.replace(/^```json/, "").replace(/```$/, "").trim();
                       }
@@ -3331,133 +3829,65 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       return <UniversityPaperEditor initialData={parsedData} />;
                     } catch (e) {
                       console.error("Failed to parse paper-university JSON:", e);
-                      return <div className="p-10 text-red-500 overflow-auto max-h-[80vh]">Error parsing generated paper format. Raw output: <pre className="mt-2 text-xs">{resultText}</pre></div>;
+                      return <div className="p-10 text-red-500 overflow-auto max-h-[80vh]">Error parsing generated paper format. Raw output: <pre className="mt-2 text-xs">{displayedResultText}</pre></div>;
                     }
                   })()
                 )}
-                    <div 
-                      ref={notesRef}
-                  className={`prose max-w-none page-break-before exam-paper-table mx-auto ${resultType === 'exam-paper' && examPaperType === 'paper-university' ? 'hidden' : ''} bg-white shadow-xl ${(mode === 'student' && resultType !== 'exam-paper') ? `${handwritingFont} text-xl p-10 pb-16 rounded-sm relative` : 'font-sans text-[#4A4A3F] p-10 relative'}`}
-                  style={Object.assign({
-                    width: '210mm',
-                    minHeight: '297mm',
-                    boxSizing: 'border-box'
-                  }, (mode === 'student' && resultType !== 'exam-paper') ? {
-                    backgroundImage: pageStyle === 'ruled' 
-                      ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
-                      : pageStyle === 'box' 
-                        ? 'repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px), repeating-linear-gradient(90deg, transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px)' 
-                        : 'none',
-                    backgroundAttachment: 'local',
-                    lineHeight: '32px',
-                    '--tw-prose-body': penColor === 'blue' ? '#1d4ed8' : '#3A3A2F',
-                    '--tw-prose-headings': '#3A3A2F',
-                    '--tw-prose-bold': '#3A3A2F',
-                    '--tw-prose-th-borders': penColor === 'blue' ? 'rgba(29, 78, 216, 0.3)' : 'rgba(58, 58, 47, 0.3)',
-                    '--tw-prose-td-borders': penColor === 'blue' ? 'rgba(29, 78, 216, 0.2)' : 'rgba(58, 58, 47, 0.2)',
-                    color: penColor === 'blue' ? '#1d4ed8' : '#3A3A2F',
-                  } as React.CSSProperties : {})}
+
+                <div 
+                  ref={notesRef}
+                  className={`w-full flex flex-col items-center gap-8 ${resultType === 'exam-paper' && examPaperType === 'paper-university' ? 'hidden' : ''}`}
                 >
-                  {(mode === 'student' && resultType !== 'exam-paper') && (
-                    <>
-                      {pageStyle !== 'box' && <div className="absolute left-10 top-0 bottom-0 w-px bg-[#fee2e2]"></div>}
-                      <div className="absolute bottom-8 right-10 flex gap-2">
-                        <div className="w-2 h-2 rounded-full bg-[#bfdbfe]"></div>
-                        <div className="w-2 h-2 rounded-full bg-[#dbeafe]"></div>
-                      </div>
-                    </>)}
-                  <div className={(mode === 'student' && resultType !== 'exam-paper') ? "pl-8" : ""}>
-                      { resultText.split('---SET_SEPARATOR---').map((setMarkdown, index, sets) => (
-                        <div key={`set-${index}`} className="mb-10">
-                          {setMarkdown.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i).map((pageMarkdown, pageIndex, pageArr) => (
-                            <div key={`page-${pageIndex}`} className={`relative ${sets.slice(0, index).reduce((total, set) => total + set.split(/[\s\-_*"'`]*PAGE_BREAK[\s\-_*"'`]*/i).filter((page) => page.trim()).length, 0) + pageArr.slice(0, pageIndex).filter((page) => page.trim()).length === currentPageIndex ? "" : "hidden"}`}>
-
-                              <div className="markdown-content">
-                                <ReactMarkdown
-                                  remarkPlugins={[remarkGfm, remarkBreaks]}
-                            components={{
-                              table: ({node, ...props}) => <div className="overflow-x-auto my-4 w-full"><table className={`w-full border-collapse ${(mode === 'student' && resultType !== 'exam-paper') ? `border-2 border-opacity-20 ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} /></div>,
-                              th: ({node, ...props}) => <th className={`p-2 text-left ${(mode === 'student' && resultType !== 'exam-paper') ? `border-b-2 border-opacity-20 bg-transparent font-bold text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black bg-gray-200'}`} {...props} />,
-                              td: ({node, ...props}) => <td className={`p-2 ${(mode === 'student' && resultType !== 'exam-paper') ? `border-b border-opacity-20 text-inherit ${handwritingFont} ${penColor === 'blue' ? 'border-[#1d4ed8]' : 'border-[#3A3A2F]'}` : 'border border-black'}`} {...props} />,
-                              li: ({node, ...props}) => <li className={`mb-2 ${(mode === 'student' && resultType !== 'exam-paper') ? `text-inherit ${handwritingFont}` : 'text-blue-600'}`} {...props} />,
-                              h1: ({ children }) => <h1 className={`text-4xl md:text-5xl mt-10 mb-6 font-extrabold !text-black leading-tight tracking-tight`}>{children}</h1>,
-                              h2: ({ children }) => <h2 className={`text-3xl md:text-4xl mt-8 mb-5 font-bold !text-black leading-snug tracking-tight`}>{children}</h2>,
-                              h3: ({ children }) => <h3 className={`text-2xl mt-6 mb-4 font-bold !text-black`}>{children}</h3>,
-                              h4: ({ children }) => <h4 className={`font-bold !text-black`}>{children}</h4>,
-                              h5: ({ children }) => <h5 className={`font-bold !text-black`}>{children}</h5>,
-                              h6: ({ children }) => <h6 className={`font-bold !text-black`}>{children}</h6>,
-                              strong: ({ children }) => <strong className={(mode === 'student' && resultType !== 'exam-paper') ? 'font-bold text-inherit' : 'font-bold !text-black'}>{children}</strong>,
-                              em: ({ children }) => <em className={(mode === 'student' && resultType !== 'exam-paper') ? 'text-inherit' : 'text-blue-600'}>{children}</em>,
-                              pre({ node, children, ...props }: any) {
-                                return <pre {...props} className={`${props.className || ''} ${(mode === 'student' && resultType !== 'exam-paper') ? 'bg-[#F9F9F7] border border-[#E0E0D5] rounded p-4' : 'bg-gray-100 p-2'}`}>{children}</pre>;
-                              },
-                              code({ node, inline, className, children, ...props }: any) {
-                                const match = /language-(\w+)/.exec(className || '');
-                                if (!inline && match && match[1] === 'mermaid') {
-                                  const chartText = String(children).replace(/\n$/, '');
-                                  const isMermaid = /^\s*(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|gitGraph|journey|quadrantChart|xychart|requirement|C4|mindmap|timeline|block|packet|architecture|kanban|sankey)/i.test(chartText);
-                                  if (isMermaid) {
-                                    return <MermaidChart chart={chartText} handwritingFont={handwritingFont} mode={mode} penColor={penColor} />;
-                                  }
-
-                                }
-
-                                return (
-                                  <code className={`${className} ${(mode === 'student' && resultType !== 'exam-paper') && !inline ? `${handwritingFont} text-lg` : ''}`} {...props}>
-                                    {children}
-                                  </code>);
-                              },
-                              p: ({node, children, ...props}: any) => {
-                                const isStudent = mode === 'student' && resultType !== 'exam-paper';
-                                const pClass = `mb-4 ${isStudent ? `text-inherit ${handwritingFont}` : 'text-blue-600'}`;
-                                const content = String(children);
-                                if (content.includes("[DIAGRAM:")) {
-                                  const match = content.match(/\[DIAGRAM:(.*?)\]/);
-                                  const label = match ? match[1].trim() : "Diagram Placeholder";
-                                  return (
-                                    <div className="my-10 border border-[#D1D1C4] rounded-2xl p-10 flex flex-col items-center justify-center bg-white shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] min-h-[250px] relative overflow-hidden">
-                                      <div className="absolute top-0 left-0 w-full h-1 bg-[#5A5A40] opacity-20"></div>
-                                      <span className="bg-[#FAF9F6] text-[#8A8A7A] px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] mb-4 border border-[#E0E0D5]">Missing Diagram</span>
-                                      <span className="text-[#3A3A2F] font-serif text-xl text-center max-w-md leading-snug">{label}</span>
-                                      <p className="text-[#A1A194] font-sans text-xs mt-4 text-center">Gemini could not automatically extract this diagram as Mermaid code.</p>
-                                    </div>);
-                                }
-
-                                if (/^Q\d+\.\s+/.test(content) && content.includes("Correct Answer:")) {
-                                  const parts = content.split(/(A\)\s+|B\)\s+|C\)\s+|D\)\s+|Correct Answer:)/);
-                                  return (
-                                    <p className="whitespace-pre-wrap">
-                                      {parts.map((part, i) => {
-                                        if (part.startsWith('A)') || part.startsWith('B)') || part.startsWith('C)') || part.startsWith('D)')) {
-                                          return <span key={i} className="block">{part}</span>;
-                                        }
-
-                                        if (part.startsWith('Correct Answer:')) {
-                                          return <strong key={i} className="block text-black mt-2">{part}</strong>;
-                                        }
-
-                                        return <strong key={i} className="block text-black font-bold">{part}</strong>;
-                                      })}
-                                    </p>);
-                                }
-
-                                if (typeof children === 'string' && children.includes('?')) {
-                                  return <p className="font-bold text-black">{children}</p>;
-                                }
-
-                                return <p className={pClass} {...props}>{children}</p>;
-                              }
-
-                            }
-}
-                          >
-                            {pageMarkdown}
-                          </ReactMarkdown>
+                  {pagesToRender.map((pageMarkdown, pageIdx) => {
+                    const isPageActive = pageIdx === currentPageIndex;
+                    const isSingleHidden = summaryViewMode === "single" && !isPageActive;
+                    return (
+                      <div
+                        key={`summary-page-sheet-${pageIdx}`}
+                        id={`summary-page-${pageIdx}`}
+                        className={`w-full max-w-[210mm] prose max-w-none page-break-before exam-paper-table mx-auto bg-white shadow-xl rounded-sm transition-all border border-slate-200/80 relative ${
+                          (mode === 'student' && resultType !== 'exam-paper') 
+                            ? `${handwritingFont} text-xl p-10 pb-16` 
+                            : 'font-sans text-[#4A4A3F] p-10 rounded-lg'
+                        } ${isSingleHidden ? 'hidden' : ''}`}
+                        style={getPageSheetStyle()}
+                      >
+                        {/* Page Top Header Bar */}
+                        <div className="flex items-center justify-between border-b border-slate-200/80 pb-2 mb-6 select-none not-prose text-xs text-slate-400 font-mono">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold tracking-wide">
+                            Page {pageIdx + 1} of {pagesToRender.length}
+                          </span>
+                          <span className="text-[11px] text-slate-400 font-medium">Notivexa Handwritten Study Notes</span>
                         </div>
-                      </div>))}
-                        </div>))}
-                  </div>
 
+                        {(mode === 'student' && resultType !== 'exam-paper') && (
+                          <>
+                            {pageStyle !== 'box' && <div className="absolute left-10 top-0 bottom-0 w-px bg-[#fee2e2] pointer-events-none"></div>}
+                            <div className="absolute bottom-8 right-10 flex gap-2 pointer-events-none">
+                              <div className="w-2 h-2 rounded-full bg-[#bfdbfe]"></div>
+                              <div className="w-2 h-2 rounded-full bg-[#dbeafe]"></div>
+                            </div>
+                          </>
+                        )}
+
+                        <div className={(mode === 'student' && resultType !== 'exam-paper') ? "pl-8" : ""}>
+                          <div className="markdown-content">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm, remarkBreaks]}
+                              components={markdownComponents}
+                            >
+                              {pageMarkdown}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+
+                        {/* Page Bottom Footer */}
+                        <div className="mt-8 pt-3 border-t border-dashed border-slate-200/60 flex items-center justify-center select-none not-prose text-xs text-slate-400 font-mono">
+                          <span>— Page {pageIdx + 1} —</span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>)}
@@ -3940,10 +4370,21 @@ This study companion has been successfully downloaded from your Notivexa AI Port
       {showPreviewModal && (
         <SlidePreviewModal 
           slides={slides} 
+          topic={selectedPPTTopic}
           theme={pptTheme}
           onClose={() => setShowPreviewModal(false)} 
         />
       )}
+      <PPTTopicStudioModal
+        isOpen={showPPTStudioModal}
+        onClose={() => setShowPPTStudioModal(false)}
+        fileName={file ? file.name : "Study Material"}
+        fileUri={fileData?.fileUri || ""}
+        mimeType={fileData?.mimeType || "application/pdf"}
+        onGenerate={handleGenerateFromStudio}
+        isGenerating={loading && generatingType === "ppt"}
+        isDarkMode={isDarkMode}
+      />
       {showSettings && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && setShowSettings(false)}>
           <section role="dialog" aria-modal="true" aria-labelledby="settings-title" className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${isDarkMode ? "border-[#383832] bg-[#22221F] text-[#E0E0D5]" : "border-slate-200 bg-white text-slate-800"}`}>
@@ -3982,6 +4423,28 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                   <option value="font-handwriting-patrick">Patrick Hand</option>
                 </select>
               </label>
+              <div className={`pt-4 border-t ${isDarkMode ? "border-[#383832]" : "border-slate-100"}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="block text-sm font-semibold">Two-Factor Authentication</span>
+                    <span className={`block text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
+                      SMS OTP protection for sign in
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSettings(false);
+                      setShowMfaModal(true);
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 shadow-sm transition-all"
+                  >
+                    Configure 2FA
+                  </button>
+                </div>
+              </div>
+
+
             </div>
           </section>
         </div>
@@ -4008,6 +4471,14 @@ This study companion has been successfully downloaded from your Notivexa AI Port
             </p>
           </section>
         </div>
+      )}
+      {user && (
+        <MfaSettingsModal
+          user={user}
+          isDarkMode={isDarkMode}
+          isOpen={showMfaModal}
+          onClose={() => setShowMfaModal(false)}
+        />
       )}
 </div>
   );

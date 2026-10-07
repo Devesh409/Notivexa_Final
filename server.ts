@@ -489,8 +489,11 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 1, initial
       const isOverload = checkIsOverload(error, errorMsg);
       const isTimeout = checkIsTimeout(error, errorMsg);
       const isRateLimit = checkIsRateLimit(error, errorMsg);
+      const isNetworkFetchError = errorMsg.includes("fetch failed");
 
-      if (failFastOnOverload && (isOverload || isTimeout || isRateLimit)) {
+      // Only fail fast on overload/rate-limit or non-network timeouts.
+      // If it's a transient socket/fetch failed error, allow at least 1 retry on the current model before falling back.
+      if (failFastOnOverload && (isOverload || isRateLimit || (isTimeout && !isNetworkFetchError))) {
         console.warn(`Gemini API rate limit/overload/timeout error (${error.message}). Skipping retries for this model to trigger fallback immediately.`);
         throw error;
       }
@@ -522,12 +525,15 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 1, initial
 
 async function generateContentWithFallback(ai: any, params: any, excludedModels = new Set<string>(), requireText = false): Promise<any> {
   const modelsToTry = [
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-3.8-flash",
     "gemini-3.5-flash",
-    "gemini-3.1-pro-preview"
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite"
   ];
-  const initialModel = params.model || "gemini-3.5-flash-lite";
+  const initialModel = params.model || "gemini-3.8-flash";
   const uniqueModels = Array.from(new Set([initialModel, ...modelsToTry]));
   const availableModels = uniqueModels.filter((model) => !excludedModels.has(model));
   
@@ -642,7 +648,7 @@ app.post("/api/chat", async (req, res) => {
     });
 
     const response = await generateContentWithFallback(ai, {
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.8-flash",
       contents: contents
     });
     return res.json({ result: response.text });
@@ -775,26 +781,22 @@ app.post("/api/generate-notes", async (req, res) => {
     Identify the title, subject, department, units, chapters, subtitles, headings, and subheadings when present. Preserve this hierarchy: Book > Unit > Chapter > Subtitle/Heading. Do not mix content across chapters or units. For a unit completed in this batch, include its unit overview, chapters, main concepts, definitions, key points, examples, diagrams, exam points, and unit summary. For a unit spanning batches, summarize only the covered source range and do not imply the unit is complete.
 
     CHAPTER STRUCTURE
-    For each chapter represented in this batch, include only the following sections that have useful, source-supported content, in this order. Omit unsupported sections entirely, including their headings. Each chapter should receive approximately two note pages or more only when the source contains enough material; do not force a section or page count with repetition.
-    CHAPTER [NUMBER]: [CHAPTER NAME]
-    Subtitle
+    For each chapter represented in this batch, include only the following sections that have useful, source-supported content, in this order. Omit unsupported sections entirely, including their headings. Renumber the sections sequentially based on what is included. Never output placeholder tokens such as "[NUMBER]" or "[CHAPTER NAME]"; always use the real chapter number and title extracted from the document (e.g. "# Chapter 1: Introduction to Data Structures").
+    Format the chapter heading clearly using the real chapter number and chapter title:
+    # Chapter <Actual Number>: <Actual Chapter Title>
     1. Chapter Introduction
     2. Chapter Description
-    3. Main Headings
-    4. Heading-wise Explanation
-    5. Key Points
-    6. Important Definitions
-    7. Types / Classification
-    8. Algorithms / Processes
-    9. Examples
-    10. Diagrams
-    11. Tables
-    12. Advantages
-    13. Disadvantages
-    14. Applications
-    15. Limitations
-    16. Important Exam Points
-    17. Chapter Conclusion
+    3. Main Headings & Topic-wise Explanations
+    4. Key Points
+    5. Important Definitions & Formulae
+    6. Types / Classification
+    7. Algorithms / Step-by-Step Processes
+    8. Examples & Case Studies
+    9. Diagrams & Tables
+    10. Advantages & Disadvantages
+    11. Applications & Limitations
+    12. Important Exam Points
+    13. Chapter Summary & Quick Revision
     Include only applicable source-supported content. Do not mention missing requested information.
 
     CONTENT PRESERVATION
@@ -841,8 +843,9 @@ app.post("/api/generate-notes", async (req, res) => {
         contents[0].parts.unshift({ text: `Supplementary extracted text for source pages ${sourceStart}-${sourceEnd}:\n\n${sourceText}` });
       }
 
+      console.log(`[generate-notes] Processing batch ${batchIndex + 1}/${batchCount} for ${fileUri}...`);
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents,
         config: { maxOutputTokens: 8192 },
       }, excludedModels, true);
@@ -904,7 +907,7 @@ app.post("/api/generate-assessment", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt)
       });
       return res.json({ result: response.text });
@@ -958,7 +961,7 @@ Ensure every diagram has 3 to 5 clear item nodes describing steps, layers, compo
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt)
       });
       const cleanText = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -1065,7 +1068,7 @@ app.post("/api/generate-flashcards", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1310,7 +1313,7 @@ app.post("/api/generate-question-bank", async (req, res) => {
     
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           maxOutputTokens: 8192,
@@ -1361,7 +1364,7 @@ app.post("/api/generate-lesson-plan", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1430,7 +1433,7 @@ app.post("/api/generate-video-explanation", async (req, res) => {
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1478,33 +1481,170 @@ app.post("/api/generate-video-explanation", async (req, res) => {
 
 
 
-app.post("/api/generate-ppt", async (req, res) => {
+app.post("/api/extract-topics", async (req, res) => {
   try {
-    const { fileUri, mimeType, focusArea } = req.body;
+    const { fileUri, mimeType } = req.body;
     if (!fileUri) return res.status(400).json({ error: "Missing fileUri" });
 
+    // Quick heuristic: check if we have cached text from pdf-parse to detect headings
+    const cachedText = pdfTextCache.get(fileUri) || "";
+    const fallbackTopics: { id: string; title: string; description: string; difficulty?: string }[] = [];
+    if (cachedText) {
+      const lines = cachedText.split("\n");
+      const headingRegex = /^(?:chapter|unit|module|section|part|lesson)\s+(\d+|[ivxlcdm]+)[\s:\-–—]+(.*)$/i;
+      const detectedSet = new Set<string>();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.length > 4 && trimmed.length < 85 && headingRegex.test(trimmed)) {
+          const clean = trimmed.replace(/\s+/g, " ");
+          if (!detectedSet.has(clean.toLowerCase())) {
+            detectedSet.add(clean.toLowerCase());
+            fallbackTopics.push({
+              id: String(fallbackTopics.length + 1),
+              title: clean,
+              description: "Key topic extracted from document chapter structure.",
+              difficulty: "Intermediate"
+            });
+            if (fallbackTopics.length >= 8) break;
+          }
+        }
+      }
+    }
+
     const ai = getGenAI();
-
     const prompt = `
-      You are an expert presentation designer and academic tutor. 
-      Analyze the provided study material and generate a comprehensive PowerPoint presentation structure.
-      The presentation MUST contain at least 20 slides to thoroughly cover the material.
+      You are an expert curriculum analyst and textbook indexer.
+      Analyze the provided study document and extract 4 to 8 primary topics, units, or chapters covered in this document.
       
-      The output MUST be a JSON object with:
-      1. 'title': A descriptive title for the presentation (e.g., "${focusArea || 'Course Presentation'}").
-      2. 'slides': An array of EXACTLY 20 or more slide objects.
-      
-      Each slide object MUST contain:
-      - 'slideType': (string) One of "cover", "toc", "content", "diagram", "summary", "final".
-      - 'title': (string) Title of the slide.
-      - 'bullets': (array of strings) 3 to 6 bullet points of content.
+      For each topic:
+      - 'id': short numeric string (e.g. "1")
+      - 'title': concise, clear topic title from the document (e.g. "Chapter 2: Memory Management & Paging")
+      - 'description': a single clear sentence summarizing what the student will learn in this topic
+      - 'difficulty': "Beginner" | "Intermediate" | "Advanced"
 
-      - 'diagrams': (optional array of objects) For 'diagram' type slides, include { title: string, items: string[] }.
+      Output MUST be JSON matching this exact structure:
+      {
+        "documentTitle": "Main Subject or Title of Document",
+        "topics": [
+          { "id": "1", "title": "Topic Name", "description": "Short summary of what this teaches", "difficulty": "Beginner" }
+        ]
+      }
     `;
 
     try {
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
+        contents: await getContentParts(fileUri, mimeType, prompt),
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              documentTitle: { type: Type.STRING },
+              topics: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    difficulty: { type: Type.STRING }
+                  },
+                  required: ["id", "title", "description"]
+                }
+              }
+            },
+            required: ["topics"]
+          }
+        }
+      });
+
+      const parsed = safeParseJson(response.text || "{}");
+      if (parsed.topics && Array.isArray(parsed.topics) && parsed.topics.length > 0) {
+        return res.json({
+          documentTitle: parsed.documentTitle || "Uploaded Study Document",
+          topics: parsed.topics
+        });
+      }
+    } catch (aiErr: any) {
+      console.warn("AI topic extraction fallback to heuristics:", aiErr.message);
+    }
+
+    if (fallbackTopics.length > 0) {
+      return res.json({
+        documentTitle: "Uploaded Study Document",
+        topics: fallbackTopics
+      });
+    }
+
+    // Default pedagogical fallback topics
+    return res.json({
+      documentTitle: "Uploaded Study Document",
+      topics: [
+        { id: "1", title: "Complete Document Overview", description: "Comprehensive breakdown of all primary concepts in the document.", difficulty: "Beginner" },
+        { id: "2", title: "Core Principles & Foundational Concepts", description: "Essential terms, definitions, and foundational theories.", difficulty: "Beginner" },
+        { id: "3", title: "Mechanisms, Processes & Step-by-Step Workflows", description: "Operational workflows, procedures, and implementation steps.", difficulty: "Intermediate" },
+        { id: "4", title: "Practical Applications & High-Yield Exam Review", description: "Real-world examples, critical problem-solving, and exam takeaways.", difficulty: "Advanced" }
+      ]
+    });
+  } catch (error: any) {
+    console.error("Extract topics error:", error);
+    const formatted = formatGeminiError(error);
+    return res.status(500).json({ error: formatted });
+  }
+});
+
+app.post("/api/generate-ppt", async (req, res) => {
+  try {
+    const { fileUri, mimeType, focusArea, topic, slideCount, learningLevel } = req.body;
+    if (!fileUri) return res.status(400).json({ error: "Missing fileUri" });
+
+    const ai = getGenAI();
+    const selectedTopic = (topic || focusArea || "").trim();
+    const targetSlideCount = Math.max(6, Math.min(Number(slideCount) || 10, 20));
+    const targetLevel = learningLevel || "simple";
+
+    const prompt = `
+      You are an expert instructional presentation designer and master academic tutor.
+      Your goal is to transform the provided document into a **simple, intuitive, and easy-to-learn** PowerPoint presentation slide deck.
+
+      GROUNDING IN DOCUMENT:
+      - All slide content MUST be strictly derived from and faithful to the uploaded document material.
+      
+      USER-SELECTED TOPIC:
+      ${selectedTopic ? `The user has chosen to generate this presentation specifically on the following topic from the document:
+      >>> SELECTED TOPIC: "${selectedTopic}" <<<
+      Every slide must be laser-focused on teaching this topic clearly and comprehensively using the document's content.` : `The presentation should cover the primary core concepts of the document in a clear, easy-to-learn sequence.`}
+
+      "SIMPLE & EASY TO LEARN" PEDAGOGICAL DESIGN RULES:
+      1. Crystal-Clear Concept Breakdown:
+         - Explain concepts in plain, direct, and engaging language so any student can learn effortlessly.
+         - Avoid walls of dense text. One core concept per slide.
+         - Start each bullet point with a **Bold Keyword** or action phrase (e.g., "**Definition:** ...", "**How it works:** ...", "**Why it matters:** ...", "**Key Rule:** ...").
+         - Keep bullets concise (1-2 lines per bullet).
+      2. High-Retention Educational Anchors:
+         - For each slide, provide a 'tag' categorizing the slide (e.g., "Introduction", "Core Principle", "Step-by-Step", "Real-World Analogy", "Common Pitfall", "Quick Summary").
+         - For each slide, provide a 'keyTakeaway': a simple, memorable single-sentence takeaway that the student can recall during exams.
+         - For concept slides, provide an 'example': a real-life analogy, practical scenario, or intuitive mental model.
+         - For process/workflow slides, provide a 'diagrams' array with { title: string, items: string[] } to represent steps visually.
+      3. Slide Deck Arc (Total EXACTLY ${targetSlideCount} slides):
+         - Slide 1: Cover slide introducing the topic and primary learning objective.
+         - Slide 2: "Big Picture / Intuitive Overview" (What is this topic and why do we study it?).
+         - Slides 3 to ${targetSlideCount - 2}: Step-by-step conceptual walkthroughs of key components, formulas, mechanisms, or principles from the document.
+         - Slide ${targetSlideCount - 1}: Visual Comparison / Process Workflow slide synthesizing the material.
+         - Slide ${targetSlideCount}: Final Summary & Quick Knowledge-Check (Key points to remember + 2 quick self-test questions).
+
+      Output MUST be a JSON object with:
+      - 'title': Presentation title (e.g. "${selectedTopic || 'Document Study Presentation'}").
+      - 'topic': "${selectedTopic || 'Core Document Concepts'}".
+      - 'learningObjective': A clear 1-sentence learning outcome.
+      - 'slides': Array of EXACTLY ${targetSlideCount} slide objects.
+    `;
+
+    try {
+      const response = await generateContentWithFallback(ai, {
+        model: "gemini-3.8-flash",
         contents: await getContentParts(fileUri, mimeType, prompt),
         config: {
           responseMimeType: "application/json",
@@ -1512,15 +1652,20 @@ app.post("/api/generate-ppt", async (req, res) => {
             type: Type.OBJECT,
             properties: {
               title: { type: Type.STRING },
+              topic: { type: Type.STRING },
+              learningObjective: { type: Type.STRING },
               slides: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
                   properties: {
+                    slideNumber: { type: Type.INTEGER },
                     slideType: { type: Type.STRING },
                     title: { type: Type.STRING },
+                    tag: { type: Type.STRING },
+                    keyTakeaway: { type: Type.STRING },
                     bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
-
+                    example: { type: Type.STRING },
                     diagrams: { 
                       type: Type.ARRAY, 
                       items: {
@@ -1528,7 +1673,8 @@ app.post("/api/generate-ppt", async (req, res) => {
                         properties: {
                           title: { type: Type.STRING },
                           items: { type: Type.ARRAY, items: { type: Type.STRING } }
-                        }
+                        },
+                        required: ["title", "items"]
                       }
                     }
                   },
