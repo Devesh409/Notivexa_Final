@@ -295,20 +295,20 @@ export function LibraryPanel({
             <div className="flex items-center gap-3">
               <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${isDarkMode ? "bg-sky-500/15 text-sky-300" : "bg-white text-sky-700 shadow-sm"}`}><FileUp size={21} /></span>
               <span>
-                <span className={`block text-sm font-bold ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>Have a PDF on your computer?</span>
-                <span className={`mt-1 block text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Keep it on this device and add a cover to your shelf.</span>
+                <span className={`block text-sm font-bold ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>Have a Digital Document or PDF on your device?</span>
+                <span className={`mt-1 block text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Save PDF, Word (.DOCX), PowerPoint (.PPTX), Excel/CSV, or Markdown/Text files to your shelf.</span>
               </span>
             </div>
             <div className="flex items-center gap-2 sm:shrink-0 xl:w-full">
-              <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={handleLocalBookPick} />
-              <button type="button" disabled={isSavingBook} onClick={() => fileInputRef.current?.click()} className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition-all hover:-translate-y-0.5 disabled:opacity-60 ${isDarkMode ? "border-[#55554B] bg-[#22221F] text-[#E0E0D5] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-700 shadow-sm hover:border-sky-300 hover:text-sky-800"}`}>
+              <input ref={fileInputRef} type="file" accept="application/pdf,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.odt,.rtf,.txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,.xml,.tex" className="hidden" onChange={handleLocalBookPick} />
+              <button type="button" disabled={isSavingBook} onClick={() => fileInputRef.current?.click()} className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition-all hover:-translate-y-0.5 disabled:opacity-60 cursor-pointer ${isDarkMode ? "border-[#55554B] bg-[#22221F] text-[#E0E0D5] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-700 shadow-sm hover:border-sky-300 hover:text-sky-800"}`}>
                 {isSavingBook ? <Loader2 size={15} className="animate-spin" /> : <FileUp size={15} />}
-                Add PDF from device
+                Add Digital File / PDF from device
               </button>
             </div>
           </div>
         </div>
-        <p className={`mt-3 text-[11px] ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Selecting Study Book uploads a PDF for processing. Web links save their source URL and book details.</p>
+        <p className={`mt-3 text-[11px] ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Selecting Study Book uploads your Digital Document File or PDF for automatic scanning and 14-function generation.</p>
         {saveError && <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:bg-red-950/30 dark:text-red-300">{saveError}</motion.p>}
         {saveMessage && <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} role="status" className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">{saveMessage}</motion.p>}
 

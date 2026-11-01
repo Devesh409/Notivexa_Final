@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { auth, db } from "../firebase";
-import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification, sendPasswordResetEmail } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import {
   signInWithEmailAndHandleMfa,
@@ -24,7 +24,8 @@ import {
   User as UserIcon,
   Eye,
   EyeOff,
-  CheckCircle2
+  CheckCircle2,
+  KeyRound
 } from "lucide-react";
 
 export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
@@ -58,6 +59,11 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
+
+  // Forgot Password state
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
 
   // Start cooldown timer for OTP resends
   const startCooldown = (seconds = 30) => {
@@ -153,13 +159,15 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
         }
       }
     } catch (err: any) {
-      console.error(err);
       if (err.code === "auth/invalid-credential" || err.code === "auth/wrong-password" || err.code === "auth/user-not-found") {
         setError("Invalid email address or password.");
       } else if (err.code === "auth/email-already-in-use") {
         setError("An account with this email already exists. Try signing in instead.");
       } else if (err.code === "auth/weak-password") {
         setError("Password should be at least 6 characters long.");
+      } else if (err.code === "auth/unauthorized-domain") {
+        const domain = typeof window !== "undefined" ? window.location.hostname : "this domain";
+        setError(`Domain (${domain}) is not yet authorized for reCAPTCHA/MFA in Firebase Console > Authentication > Settings > Authorized domains.`);
       } else {
         setError(err.message || "Failed to authenticate. Please try again.");
       }
@@ -179,7 +187,6 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
     try {
       await confirmMfaSignIn(mfaResolver, mfaVerificationId, otpCode.trim());
     } catch (err: any) {
-      console.error(err);
       setError("Incorrect or expired OTP verification code. Please check and try again.");
     } finally {
       setLoading(false);
@@ -197,7 +204,6 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
       setMfaVerificationId(newVId);
       startCooldown(30);
     } catch (err: any) {
-      console.error(err);
       setError("Failed to resend OTP. Please try again in a few moments.");
     } finally {
       setLoading(false);
@@ -223,12 +229,15 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
       setOtpCode("");
       startCooldown(30);
     } catch (err: any) {
-      console.error(err);
       resetRecaptchaVerifier("auth-recaptcha-container");
       if (err.code === "auth/invalid-phone-number") {
         setError("Invalid phone number. Ensure you included the country code (e.g. +1 or +91).");
       } else if (err.code === "auth/operation-not-allowed") {
         setError("SMS is not enabled for this region in your Firebase Console. Please enable the Phone provider and allow India (+91) under Authentication > SMS Region Policy (or use a test phone number).");
+      } else if (err.code === "auth/unauthorized-domain") {
+        const domain = typeof window !== "undefined" ? window.location.hostname : "this domain";
+        setAuthMethod("email");
+        setError(`Phone OTP requires "${domain}" in Firebase Console > Authentication > Settings > Authorized domains. Switched to Email & Password sign-in, which works immediately.`);
       } else {
         setError(err.message || "Failed to send verification SMS. Please try again.");
       }
@@ -248,8 +257,38 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
     try {
       await confirmPhoneLoginOtp(phoneConfirmation, otpCode.trim());
     } catch (err: any) {
-      console.error(err);
       setError("Invalid or expired OTP code. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setResetSuccessMessage(null);
+    const targetEmail = email.trim();
+    if (!targetEmail) {
+      setError("Please enter your account email address.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, targetEmail);
+      setResetEmailSent(true);
+      setResetSuccessMessage(`Password reset link sent to ${targetEmail}! Please check your inbox and spam folder.`);
+      startCooldown(60);
+    } catch (err: any) {
+      console.warn("Password reset error:", err);
+      if (err?.code === "auth/user-not-found") {
+        setError("No account was found with this email address. Please check your spelling or sign up.");
+      } else if (err?.code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+      } else if (err?.code === "auth/too-many-requests") {
+        setError("Too many password reset requests. Please wait a few minutes before trying again.");
+      } else {
+        setError(err?.message || "Failed to send password reset email. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -261,6 +300,9 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
     setMfaResolver(null);
     setPhoneConfirmation(null);
     setOtpCode("");
+    setIsForgotPassword(false);
+    setResetEmailSent(false);
+    setResetSuccessMessage(null);
     resetRecaptchaVerifier("auth-recaptcha-container");
   };
 
@@ -269,6 +311,9 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
     setError(null);
     setPassword("");
     setConfirmPassword("");
+    setIsForgotPassword(false);
+    setResetEmailSent(false);
+    setResetSuccessMessage(null);
   };
 
   return (
@@ -289,8 +334,106 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
         </div>
       )}
 
-      {/* --- SCENARIO 1: MFA 2-STEP VERIFICATION SCREEN --- */}
-      {isMfaActive ? (
+      {/* --- SCENARIO 0: FORGOT PASSWORD SCREEN --- */}
+      {isForgotPassword ? (
+        <form onSubmit={handleForgotPasswordSubmit} className="w-full flex flex-col gap-4 animate-in fade-in duration-200">
+          <div className="text-center py-2">
+            <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20">
+              <KeyRound size={24} />
+            </div>
+            <h3 className={`text-lg font-bold font-serif ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
+              Reset Your Password
+            </h3>
+            <p className={`text-xs mt-1.5 leading-relaxed ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+              Enter your account email address and we will send you a password reset link.
+            </p>
+          </div>
+
+          {resetSuccessMessage ? (
+            <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 flex flex-col gap-3 text-xs text-left">
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2 size={18} className="shrink-0 text-emerald-500 mt-0.5" />
+                <span className="leading-relaxed font-medium">{resetSuccessMessage}</span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Click the link in the email to choose a new password, then return here to sign in.
+              </p>
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  onClick={handleForgotPasswordSubmit}
+                  disabled={loading || resendCooldown > 0}
+                  className={`text-xs font-semibold flex items-center gap-1 ${
+                    resendCooldown > 0
+                      ? "text-slate-400 cursor-not-allowed"
+                      : "text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                  }`}
+                >
+                  <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                  <span>{resendCooldown > 0 ? `Resend link in ${resendCooldown}s` : "Resend reset link"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotPassword(false);
+                    setResetSuccessMessage(null);
+                    setError(null);
+                  }}
+                  className="text-xs font-semibold text-sky-600 dark:text-sky-400 hover:underline cursor-pointer"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col text-left">
+                <label className={`text-xs font-semibold mb-1 ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>
+                  Account Email Address
+                </label>
+                <div className="relative">
+                  <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="email"
+                    placeholder="Enter your registered email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl border transition-all focus:ring-2 outline-none text-sm ${
+                      isDarkMode
+                        ? "bg-[#1C1C19] border-[#4A4A3F] focus:border-sky-500 focus:ring-sky-500/20 text-[#F5F5F0]"
+                        : "bg-slate-50 border-slate-200 focus:border-sky-500 focus:ring-sky-500/20 text-slate-900"
+                    }`}
+                    required
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !email.trim()}
+                className="w-full py-3.5 px-6 rounded-xl font-semibold text-white bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 transition-all shadow-md shadow-sky-500/20 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2 text-sm cursor-pointer"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin" /> : "Send Password Reset Link"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsForgotPassword(false);
+                  setError(null);
+                }}
+                className={`w-full text-xs font-medium transition-colors pt-1 flex items-center justify-center gap-1.5 ${
+                  isDarkMode ? "text-slate-400 hover:text-slate-200" : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <ArrowLeft size={13} />
+                <span>Back to Sign In</span>
+              </button>
+            </>
+          )}
+        </form>
+      ) : isMfaActive ? (
         <form onSubmit={handleVerifyMfaOtp} className="w-full flex flex-col gap-4 animate-in fade-in duration-200">
           <div className="text-center py-2">
             <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-sky-500/20">
@@ -564,9 +707,27 @@ export const AuthForm = ({ isDarkMode }: { isDarkMode: boolean }) => {
 
               {/* Password field */}
               <div className="flex flex-col text-left">
-                <label className={`text-xs font-semibold mb-1 ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>
-                  Password
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className={`text-xs font-semibold ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>
+                    Password
+                  </label>
+                  {isLogin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsForgotPassword(true);
+                        setError(null);
+                        setResetEmailSent(false);
+                        setResetSuccessMessage(null);
+                      }}
+                      className={`text-xs font-medium transition-colors hover:underline cursor-pointer ${
+                        isDarkMode ? "text-sky-400 hover:text-sky-300" : "text-sky-600 hover:text-sky-700"
+                      }`}
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
                 <div className="relative">
                   <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input

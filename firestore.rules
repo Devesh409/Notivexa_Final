@@ -25,8 +25,11 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['email', 'createdAt']) &&
-             data.keys().size() == 2 &&
+             data.keys().hasOnly(['email', 'createdAt', 'fullName', 'displayName', 'phoneNumber']) &&
              data.email is string && data.email.size() <= 200 &&
+             (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 200)) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 200)) &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 50)) &&
              data.createdAt == request.time;
     }
 
@@ -34,9 +37,11 @@ service cloud.firestore {
       allow read: if isSignedIn() && request.auth.uid == userId;
       allow create: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidUser(incoming());
       allow update: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && (
-        // Action: Update email
-        incoming().diff(existing()).affectedKeys().hasOnly(['email']) &&
-        incoming().email is string && incoming().email.size() <= 200
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'fullName', 'displayName', 'phoneNumber']) &&
+        (!('email' in incoming()) || (incoming().email is string && incoming().email.size() <= 200)) &&
+        (!('fullName' in incoming()) || (incoming().fullName is string && incoming().fullName.size() <= 200)) &&
+        (!('displayName' in incoming()) || (incoming().displayName is string && incoming().displayName.size() <= 200)) &&
+        (!('phoneNumber' in incoming()) || (incoming().phoneNumber is string && incoming().phoneNumber.size() <= 50))
       );
       allow delete: if false; // Users cannot be deleted directly from client
 

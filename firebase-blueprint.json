@@ -9,6 +9,18 @@
           "type": "string",
           "description": "User's email address"
         },
+        "fullName": {
+          "type": "string",
+          "description": "User's full name"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's display name"
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "User's phone number"
+        },
         "createdAt": {
           "type": "string",
           "description": "Timestamp when the user was created"

@@ -151,25 +151,44 @@ div#root > div > div > div > div > div > div > div > div > div > div:nth-child(2
 
 .exam-paper-table table {
   width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   font-family: "Times New Roman", Times, serif;
   color: black;
-  table-layout: fixed;
+  table-layout: auto;
 }
 .exam-paper-table th, .exam-paper-table td {
   border: 1px solid #000;
-  padding: 10px;
+  padding: 8px 10px;
   vertical-align: top;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
 }
 .exam-paper-table th {
   background-color: #f3f4f6;
   font-weight: bold;
   text-align: center;
 }
-.exam-paper-table th:nth-child(1), .exam-paper-table td:nth-child(1) { width: 10%; }
-.exam-paper-table th:nth-child(2), .exam-paper-table td:nth-child(2) { width: 25%; }
-.exam-paper-table th:nth-child(3), .exam-paper-table td:nth-child(3) { width: 50%; }
-.exam-paper-table th:nth-child(4), .exam-paper-table td:nth-child(4) { width: 15%; }
+
+.student-handwriting-table table {
+  width: 100%;
+  max-width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+.student-handwriting-table th,
+.student-handwriting-table td {
+  box-sizing: border-box;
+  vertical-align: top;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+}
+
 
 
 
