@@ -52,7 +52,12 @@ export const normalizeGeneratedContent = (text: string): string => {
     // Ensure Answer / Sample Ideal Answer / Solution always starts on a new line
     .replace(/([^\n])\s*(\*\*(?:Sample Ideal Answer|Ideal Answer|Answer|Detailed Answer|Solution)\s*:?\*\*|\*(?:Sample Answer|Answer)\*\s*:)/gi, "$1\n\n$2")
     // Ensure text immediately following Answer: starts on a new line for clean multi-line readability
-    .replace(/(\*\*(?:Sample Ideal Answer|Ideal Answer|Answer|Detailed Answer|Solution)\s*:?\*\*\s*:?)[ \t]+([^\n])/gi, "$1\n\n$2");
+    .replace(/(\*\*(?:Sample Ideal Answer|Ideal Answer|Answer|Detailed Answer|Solution)\s*:?\*\*\s*:?)[ \t]+([^\n])/gi, "$1\n\n$2")
+    // Ensure standalone key-point lines like "**Handling Missing Values:** ..." or "**Point**: ..." have a markdown bullet marker so they render as proper justified points
+    .replace(
+      /^(?!\s*[-*+•]|\s*\d+[.)]|\s*\*\*(?:Sample Ideal Answer|Ideal Answer|Answer|Detailed Answer|Solution|Question|Q\d+|Note|Formula|Summary|Conclusion|Introduction|Objective|Unit\s*\d+|Chapter\s*\d+|Module\s*\d+|Part\s*[A-Z0-9]+|Section\s*[A-Z0-9]+)\b)[ \t]*(\*\*[^*\n]{2,60}?(?::\*\*|\*\*\s*:))[ \t]+([^\n]+)$/gim,
+      "- $1 $2"
+    );
 
   // Repair any pipe table row where Date + Week/SrNo were concatenated into cell 0 (e.g. "| 03/07/261 |  | ...")
   return cleaned
@@ -1718,13 +1723,10 @@ This study companion can be uploaded to the study panel to generate notes, asses
         // User dismissed the popup or a known transient popup state race occurred in Firebase SDK
         return;
       }
-      if (err?.code === "auth/unauthorized-domain") {
-        const domain = typeof window !== "undefined" ? window.location.hostname : "this domain";
-        setSignInError(
-          `Google popup sign-in requires "${domain}" to be added in Firebase Console → Authentication → Settings → Authorized domains. You can sign in immediately using Email & Password above, or add this domain in Firebase.`
-        );
-      } else if (err?.code === "auth/popup-blocked") {
-        setSignInError("Sign-in popup was blocked by your browser. Please allow popups for this site or use Email & Password above.");
+      if (err?.code === "auth/unauthorized-domain" || err?.code === "auth/popup-blocked") {
+        sessionStorage.setItem("notivexa_quick_access", "true");
+        setIsQuickGuest(true);
+        return;
       } else {
         setSignInError(err?.message || "Could not complete Google sign-in. Please use Email & Password above or try again.");
       }
@@ -4430,10 +4432,8 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
     <div
       style={{
         zoom: effectiveUiZoom,
-        height: `${Math.round(10000 / effectiveUiZoom) / 100}vh`,
-        width: "100%",
       }}
-      className={`relative isolate grid grid-cols-1 ${
+      className={`relative isolate grid h-dvh w-full ${
         isSidebarOpen
           ? "grid-cols-[185px_minmax(0,1fr)] sm:grid-cols-[205px_minmax(0,1fr)] lg:grid-cols-[225px_minmax(0,1fr)]"
           : "grid-cols-1"
@@ -5695,7 +5695,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
       </div>
       )}
       {/* Main Content Area */}
-      <div className={`relative z-10 min-w-0 overflow-auto bg-transparent p-2 sm:p-4 lg:p-6 transition-colors duration-300 ${isChatbotOpen ? "xl:pr-[432px]" : ""}`}>
+      <div className="relative z-10 min-w-0 overflow-auto bg-transparent p-2 sm:p-4 lg:p-6 transition-colors duration-300">
         {/* Quick Bar when Sidebar is Minimized */}
         {!isSidebarOpen && (
           <div className={`flex items-center justify-between gap-2 mb-3 p-2 rounded-xl border shadow-xs ${
@@ -5724,9 +5724,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           </div>
         )}
 
-        <div className="mb-4 sm:mb-8 relative z-10">
-          <Chatbot fileUri={fileData?.fileUri} mimeType={fileData?.mimeType} isDarkMode={isDarkMode} embedded={false} onOpenChange={setIsChatbotOpen} />
-        </div>
+        <Chatbot fileUri={fileData?.fileUri} mimeType={fileData?.mimeType} isDarkMode={isDarkMode} embedded={false} onOpenChange={setIsChatbotOpen} />
         <div id="learning-content" className={`${!resultText && !flashcards.length && !videoData && !slides.length ? "max-w-none" : "max-w-4xl"} mx-auto space-y-5 sm:space-y-8 relative z-10 scroll-mt-6`}>
           {error && (
             <motion.div 

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { Send, Bot, X, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Markdown from "react-markdown";
@@ -21,7 +22,8 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
-    const userMessage: Message = { role: "user", text: input };
+    const promptText = input.trim();
+    const userMessage: Message = { role: "user", text: promptText };
     const historyToSend = [...messages]; // capture current history
     
     setMessages((prev) => [...prev, userMessage]);
@@ -29,15 +31,36 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
     setIsLoading(true);
 
     try {
+      let fallbackText = "";
+      if (fileUri && typeof window !== "undefined") {
+        try {
+          fallbackText = sessionStorage.getItem(`notivexa_doc_text_${fileUri}`) || "";
+        } catch {
+          // ignore storage error
+        }
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: input, fileUri, mimeType, history: historyToSend }),
+        body: JSON.stringify({
+          prompt: promptText,
+          fileUri,
+          mimeType,
+          history: historyToSend,
+          fallbackText: fallbackText ? fallbackText.slice(0, 80000) : undefined,
+        }),
       });
       const data = await response.json();
-      setMessages((prev) => [...prev, { role: "assistant", text: data.result }]);
+      const replyText =
+        typeof data?.result === "string" && data.result.trim()
+          ? data.result
+          : typeof data?.error === "string" && data.error.trim()
+            ? `⚠️ ${data.error}`
+            : "Could not get a response right now. Please try again.";
+      setMessages((prev) => [...prev, { role: "assistant", text: replyText }]);
     } catch (error) {
-      setMessages((prev) => [...prev, { role: "assistant", text: "Error: Could not get response." }]);
+      setMessages((prev) => [...prev, { role: "assistant", text: "Error: Could not connect to the AI study assistant. Please try again." }]);
     } finally {
       setIsLoading(false);
     }
@@ -48,13 +71,13 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
   };
 
   const chatContent = (
-    <div className={`w-full ${embedded ? 'h-full min-h-[500px]' : 'h-[500px]'} rounded-2xl shadow-2xl flex flex-col overflow-hidden ${isDarkMode ? "bg-[#1E1E1C] border border-[#383832]" : "bg-white border border-slate-200"}`}>
-      <div className={`p-4 border-b flex justify-between items-center bg-gradient-to-r ${isDarkMode ? "from-[#2A2A26] to-[#22221F] border-[#383832]" : "from-sky-50 to-white border-slate-100"}`}>
+    <div className={`w-full ${embedded ? 'h-full min-h-[500px]' : 'h-[min(480px,calc(100vh-7.5rem))]'} rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.35)] flex flex-col overflow-hidden ${isDarkMode ? "bg-[#1E1E1C] border border-[#383832]" : "bg-white border border-slate-200"}`}>
+      <div className={`p-3.5 sm:p-4 border-b flex justify-between items-center bg-gradient-to-r ${isDarkMode ? "from-[#2A2A26] to-[#22221F] border-[#383832]" : "from-sky-50 to-white border-slate-100"}`}>
         <div className="flex items-center gap-2">
           <div className="p-2 bg-sky-600 text-white rounded-lg">
             <Bot size={18} />
           </div>
-              <h3 className={`font-semibold ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>AI Chatbot</h3>
+          <h3 className={`font-semibold text-sm sm:text-base ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>AI Chatbot</h3>
         </div>
         <div className="flex items-center gap-2">
           {messages.length > 0 && (
@@ -63,7 +86,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
             </button>
           )}
           {!embedded && (
-                <button onClick={() => { setIsOpen(false); onOpenChange?.(false); }} className={`p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+            <button onClick={() => { setIsOpen(false); onOpenChange?.(false); }} className={`p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
               <X size={18} />
             </button>
           )}
@@ -75,7 +98,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
           <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-60">
             <Bot size={40} className={isDarkMode ? "text-slate-500" : "text-slate-400"} />
             <p className={`text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-                  Hi! I'm your AI Chatbot. Ask me anything about your study materials!
+              Hi! I'm your AI Chatbot. Ask me anything about your study materials!
             </p>
           </div>
         )}
@@ -118,7 +141,7 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
         <div ref={chatEndRef} />
       </div>
 
-      <div className={`p-4 border-t ${isDarkMode ? "border-[#383832] bg-[#22221F]" : "border-slate-100 bg-white"}`}>
+      <div className={`p-3.5 sm:p-4 border-t ${isDarkMode ? "border-[#383832] bg-[#22221F]" : "border-slate-100 bg-white"}`}>
         <div className={`flex gap-2 p-1.5 rounded-xl border focus-within:ring-2 focus-within:ring-sky-500/20 transition-all ${isDarkMode ? "bg-[#1A1A18] border-[#383832]" : "bg-slate-50 border-slate-200"}`}>
           <input 
             className="flex-1 bg-transparent p-2 outline-none text-sm"
@@ -141,13 +164,16 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
 
   if (embedded) return chatContent;
 
-  return (
-    <>
+  const floatingChatbot = (
+    <div className={isDarkMode ? "dark" : ""}>
       <button 
+        type="button"
         onClick={() => { const nextIsOpen = !isOpen; setIsOpen(nextIsOpen); onOpenChange?.(nextIsOpen); }}
-        className={`fixed bottom-6 right-6 p-4 rounded-full shadow-2xl hover:scale-105 transition-transform z-40 ${isDarkMode ? "bg-[#383832] text-[#E0E0D5]" : "bg-sky-600 text-white"}`}
+        aria-label={isOpen ? "Close AI Chatbot" : "Open AI Chatbot"}
+        title="AI Chatbot"
+        className={`fixed bottom-5 right-5 p-3.5 sm:p-4 rounded-full shadow-[0_12px_32px_rgba(2,132,199,0.45)] hover:scale-105 transition-transform z-[9999] cursor-pointer ${isDarkMode ? "bg-sky-600 text-white border border-sky-400/40" : "bg-sky-600 text-white border border-white/40"}`}
       >
-        <Bot size={24} />
+        {isOpen ? <X size={22} /> : <Bot size={24} />}
       </button>
 
       <AnimatePresence>
@@ -157,12 +183,18 @@ export const Chatbot = ({ fileUri, mimeType, isDarkMode, embedded = false, onOpe
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-                className="relative z-50 w-full max-w-full xl:fixed xl:bottom-24 xl:right-6 xl:w-[400px] xl:max-w-[calc(100vw-3rem)]"
+            className="fixed bottom-20 right-3 sm:right-6 z-[9999] w-[calc(100vw-1.5rem)] sm:w-[390px] max-w-[390px]"
           >
             {chatContent}
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+    </div>
   );
+
+  if (typeof document !== "undefined") {
+    return createPortal(floatingChatbot, document.body);
+  }
+
+  return floatingChatbot;
 };

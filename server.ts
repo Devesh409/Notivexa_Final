@@ -6,7 +6,9 @@ import fs from "fs";
 import os from "os";
 import zlib from "zlib";
 import { randomUUID } from "crypto";
-const customRequire = typeof __filename !== "undefined" ? createRequire(__filename) : createRequire(import.meta.url);
+const customRequire = createRequire(
+  typeof __filename !== "undefined" ? __filename : path.join(process.cwd(), "server.ts")
+);
 const pdfParse = customRequire("pdf-parse");
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
@@ -910,14 +912,19 @@ async function generateContentWithFallback(ai: any, params: any, excludedModels 
   }
 
   const modelsToTry = [
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-flash-latest",
     "gemini-3.8-flash"
   ];
-  const initialModel = params.model || "gemini-3.1-flash-lite";
-  const uniqueModels = Array.from(new Set([initialModel, ...modelsToTry]));
+  const requested = params.model || "gemini-flash-lite-latest";
+  // Prioritize gemini-flash-lite-latest and gemini-3.5-flash-lite first to avoid 503 high-demand spikes
+  const orderedCandidates =
+    requested === "gemini-3.1-flash-lite" || requested === "gemini-3.8-flash"
+      ? ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", requested, ...modelsToTry]
+      : [requested, ...modelsToTry];
+  const uniqueModels = Array.from(new Set(orderedCandidates));
 
   // Filter out any models currently cooling down or excluded
   let availableModels = uniqueModels.filter((model) => !excludedModels.has(model) && !isModelCoolingDown(model));
@@ -948,13 +955,16 @@ async function generateContentWithFallback(ai: any, params: any, excludedModels 
     const hasMoreModels = i < availableModels.length - 1;
     try {
       console.log(`Attempting fast Gemini generation with model: ${model}`);
-      const isGemini3Model = model.startsWith("gemini-3");
-      const existingConfig = params.config || {};
+      const supportsThinkingBudget = model === "gemini-3.1-flash-lite" || model === "gemini-3.8-flash";
+      const existingConfig = { ...(params.config || {}) };
+      if (!supportsThinkingBudget && existingConfig.thinkingConfig) {
+        delete existingConfig.thinkingConfig;
+      }
       const maxOutputTokens = existingConfig.maxOutputTokens
         ? Math.min(existingConfig.maxOutputTokens, 8192)
         : undefined;
       const baseConfig = maxOutputTokens ? { ...existingConfig, maxOutputTokens } : existingConfig;
-      const fastConfig = isGemini3Model && !baseConfig.thinkingConfig
+      const fastConfig = supportsThinkingBudget && !baseConfig.thinkingConfig
         ? {
             ...baseConfig,
             thinkingConfig: {
@@ -1066,46 +1076,68 @@ app.post("/api/chat", async (req, res) => {
   try {
     const { prompt, fileUri, mimeType, history = [] } = req.body;
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
-    const ai = getGenAI();
 
-    let contents = [];
+    let contents: any[] = [];
     const sysPrompt = "You are a highly capable AI tutor and study assistant. You help students understand concepts, answer questions, and break down complex topics based on the provided document context. Use rich Markdown formatting (bold, italics, lists, code blocks, tables) to make your explanations structured and easy to read. Be encouraging, precise, and educational.";
 
     if (fileUri) {
-      // Get the document contents
-      const fileParts = await getContentParts(fileUri, mimeType || "application/pdf", "");
-      // fileParts[0] is { role: "user", parts: [ {text: doc}, {text: prompt} ] }
-      // We will replace the prompt part with our sys instruction
-      const docMsg = fileParts[0];
-      if (docMsg && docMsg.parts) {
-        docMsg.parts[docMsg.parts.length - 1] = { text: sysPrompt };
+      try {
+        const fileParts = await getContentParts(fileUri, mimeType || "application/pdf", "");
+        const docMsg = fileParts[0];
+        if (docMsg && docMsg.parts) {
+          docMsg.parts[docMsg.parts.length - 1] = { text: sysPrompt };
+        }
+        contents.push(docMsg);
+        contents.push({ role: "model", parts: [{ text: "Understood. I have reviewed the document and am ready to act as your AI tutor." }] });
+      } catch {
+        contents.push({ role: "user", parts: [{ text: sysPrompt }] });
+        contents.push({ role: "model", parts: [{ text: "Understood. I am ready to act as your AI tutor." }] });
       }
-      contents.push(docMsg);
-      contents.push({ role: "model", parts: [{ text: "Understood. I have reviewed the document and am ready to act as your AI tutor." }] });
     } else {
       contents.push({ role: "user", parts: [{ text: sysPrompt }] });
       contents.push({ role: "model", parts: [{ text: "Understood. I am ready to act as your AI tutor." }] });
     }
 
-    // Append history
     for (const msg of history) {
-      contents.push({
-        role: msg.role === "assistant" ? "model" : "user",
-        parts: [{ text: msg.text }]
-      });
+      if (msg && msg.text) {
+        contents.push({
+          role: msg.role === "assistant" ? "model" : "user",
+          parts: [{ text: String(msg.text) }]
+        });
+      }
     }
 
-    // Append current prompt
     contents.push({
       role: "user",
-      parts: [{ text: prompt }]
+      parts: [{ text: String(prompt) }]
     });
 
-    const response = await generateContentWithFallback(ai, {
-      model: "gemini-3.1-flash-lite",
-      contents: contents
-    });
-    return res.json({ result: response.text });
+    try {
+      const ai = getGenAI();
+      const response = await generateContentWithFallback(ai, {
+        model: "gemini-flash-lite-latest",
+        contents: contents
+      }, new Set<string>(), true);
+      if (response?.text) {
+        return res.json({ result: response.text });
+      }
+    } catch (primaryErr: any) {
+      console.warn("Primary chat model warning, trying Groq fallback:", primaryErr?.message || primaryErr);
+      if (process.env.GROQ_API_KEY) {
+        try {
+          const messages = convertGeminiContentsToMessages(contents);
+          const groqReply = await callGroqAPI(messages, "qwen/qwen3.8-27b", 2048, false);
+          if (groqReply && groqReply.trim()) {
+            return res.json({ result: groqReply.trim() });
+          }
+        } catch (groqErr: any) {
+          console.warn("Groq chat fallback warning:", groqErr?.message || groqErr);
+        }
+      }
+      throw primaryErr;
+    }
+
+    return res.json({ result: "I'm ready to help with your study materials. Please ask a question about any topic or section!" });
   } catch (error: any) {
     console.error("Chat error:", error);
     const formatted = formatGeminiError(error);
@@ -1700,7 +1732,6 @@ async function processUploadedTempFile(
   rawMime: string,
   originalFileName = "Uploaded_Document.pdf"
 ): Promise<{ fileUri: string; mimeType: string; extractedText?: string; digitalScan?: DigitalScanReport }> {
-  const ai = getGenAI();
   const mime = rawMime || "application/pdf";
   const lowerName = originalFileName.toLowerCase();
 
@@ -1766,6 +1797,7 @@ async function processUploadedTempFile(
     };
   }
 
+  const ai = getGenAI();
   let uploadedFileUri: string;
   let uploadedMimeType = mime;
   try {

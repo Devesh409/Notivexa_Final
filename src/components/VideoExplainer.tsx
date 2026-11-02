@@ -1473,7 +1473,7 @@ export function VideoExplainer({
                               : "Click to Speak"}
                           </span>
                         </div>
-                        <p className="text-xs sm:text-sm leading-relaxed font-medium">
+                        <p className="text-xs sm:text-sm leading-relaxed font-medium text-justify [text-align:justify]">
                           {renderWordTrackedText(
                             shortNoteUnit,
                             activeScene.shortNotes || ""
@@ -1513,7 +1513,7 @@ export function VideoExplainer({
                                 onClick={() => {
                                   if (unitIdx >= 0) handleJumpToUnit(unitIdx);
                                 }}
-                                className={`text-xs sm:text-sm leading-relaxed flex items-start gap-2.5 p-3 rounded-xl border transition-all cursor-pointer ${
+                                className={`text-xs sm:text-sm leading-relaxed flex items-start gap-2.5 p-3 rounded-xl border transition-all cursor-pointer text-justify [text-align:justify] ${
                                   isCurrentFocus
                                     ? "bg-amber-50/95 text-slate-950 border-amber-400 shadow-sm ring-2 ring-amber-400/70"
                                     : `${themeStyles.cardBg} hover:border-indigo-400/60`
@@ -1528,7 +1528,7 @@ export function VideoExplainer({
                                 >
                                   {i + 1}
                                 </span>
-                                <div className="flex-1 min-w-0">
+                                <div className="flex-1 min-w-0 text-justify [text-align:justify]">
                                   {unit ? (
                                     renderWordTrackedText(unit, bullet)
                                   ) : (
@@ -1575,7 +1575,7 @@ export function VideoExplainer({
                                   : "Click to Speak"}
                               </span>
                             </div>
-                            <p className="text-xs sm:text-sm leading-relaxed">
+                            <p className="text-xs sm:text-sm leading-relaxed text-justify [text-align:justify]">
                               {renderWordTrackedText(
                                 explainUnit,
                                 activeScene.detailedExplanation || activeScene.narration
