@@ -684,7 +684,31 @@ export default function App() {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [activeNav, setActiveNav] = useState<"materials" | "library" | "tools" | "learning">("materials");
   const [isChatbotOpen, setIsChatbotOpen] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const [uiZoomMode, setUiZoomMode] = useState<"auto" | "0.65" | "0.75" | "0.85" | "0.92" | "1">("auto");
+  const [windowWidth, setWindowWidth] = useState<number>(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1280
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const effectiveUiZoom =
+    uiZoomMode === "auto"
+      ? windowWidth < 520
+        ? 0.68
+        : windowWidth < 768
+          ? 0.76
+          : windowWidth < 1080
+            ? 0.85
+            : windowWidth < 1320
+              ? 0.92
+              : 1
+      : parseFloat(uiZoomMode);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showMfaModal, setShowMfaModal] = useState(false);
@@ -1217,7 +1241,9 @@ export default function App() {
 
   const navigateToSection = (section: "materials" | "library" | "tools" | "learning") => {
     setActiveNav(section);
-    if (section !== "learning") setIsSidebarOpen(true);
+    if (section === "materials" || section === "tools") {
+      setIsSidebarOpen(true);
+    }
     if (section === "materials") setInputType("upload");
     const targetId = section === "library" ? "dashboard-library" : section === "tools" ? "learning-tools" : section === "learning" ? "learning-content" : "material-source";
     requestAnimationFrame(() => {
@@ -4401,7 +4427,22 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
   }
 
   return (
-    <div className={`relative isolate grid h-screen ${isSidebarOpen ? "grid-cols-[18rem_minmax(0,1fr)]" : "grid-cols-1"} grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden p-3 font-sans transition-colors duration-300 ${isDarkMode ? "bg-[#131311] text-[#E0E0D5] dark" : "bg-gradient-to-br from-[#dcebf1] via-[#eaf1f7] to-[#e5eaf4] text-slate-800"}`}>
+    <div
+      style={{
+        zoom: effectiveUiZoom,
+        height: `${Math.round(10000 / effectiveUiZoom) / 100}vh`,
+        width: "100%",
+      }}
+      className={`relative isolate grid grid-cols-1 ${
+        isSidebarOpen
+          ? "grid-cols-[185px_minmax(0,1fr)] sm:grid-cols-[205px_minmax(0,1fr)] lg:grid-cols-[225px_minmax(0,1fr)]"
+          : "grid-cols-1"
+      } grid-rows-[auto_minmax(0,1fr)] gap-1.5 sm:gap-2.5 overflow-hidden p-1.5 sm:p-2.5 font-sans transition-colors duration-300 ${
+        isDarkMode
+          ? "bg-[#131311] text-[#E0E0D5] dark"
+          : "bg-gradient-to-br from-[#dcebf1] via-[#eaf1f7] to-[#e5eaf4] text-slate-800"
+      }`}
+    >
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
         <div
           className="absolute inset-0"
@@ -4433,33 +4474,33 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           <path d="M0 708C168 635 290 665 438 739C589 815 726 829 884 772C1039 716 1151 672 1291 711C1414 747 1511 680 1600 621" fill="none" stroke="#fff" strokeWidth="3" strokeOpacity=".46" vectorEffect="non-scaling-stroke" />
         </svg>
       </div>
-      <header className={`col-span-full relative z-30 flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-4 py-3 backdrop-blur-md ${isDarkMode ? "border-[#383832] bg-[#22221F]/95 shadow-[0_8px_28px_rgba(0,0,0,0.25)]" : "border-white/70 bg-white/90 shadow-[0_8px_28px_rgba(15,23,42,0.08)]"}`}>
-        <div className="flex min-w-0 items-center gap-3">
+      <header className={`col-span-full relative z-30 flex flex-wrap items-center justify-between gap-2 sm:gap-3 rounded-2xl border px-3 py-2.5 sm:px-4 sm:py-3 backdrop-blur-md ${isDarkMode ? "border-[#383832] bg-[#22221F]/95 shadow-[0_8px_28px_rgba(0,0,0,0.25)]" : "border-white/70 bg-white/95 shadow-[0_8px_28px_rgba(15,23,42,0.08)]"}`}>
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={() => setIsSidebarOpen((open) => !open)}
             aria-label={isSidebarOpen ? "Collapse study panel" : "Expand study panel"}
             aria-expanded={isSidebarOpen}
             title={isSidebarOpen ? "Collapse study panel" : "Expand study panel"}
-            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors ${isDarkMode ? "border-[#383832] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            className={`flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-xl border transition-colors ${isDarkMode ? "border-[#383832] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
           >
-            <Menu size={19} />
+            <Menu size={18} />
           </button>
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 text-white shadow-sm">
-            <GraduationCap size={21} />
+          <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 text-white shadow-sm">
+            <GraduationCap size={19} />
           </div>
-          <div className="hidden min-w-0 sm:block">
-            <p className={`text-[10px] font-bold uppercase tracking-[0.16em] ${isDarkMode ? "text-sky-300" : "text-sky-700"}`}>Notivexa Learning Hub</p>
-            <p className={`truncate text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Study workspace</p>
+          <div className="min-w-0">
+            <p className={`text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.14em] truncate ${isDarkMode ? "text-sky-300" : "text-sky-700"}`}>Notivexa AI</p>
+            <p className={`hidden sm:block truncate text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Study workspace</p>
           </div>
         </div>
-        <nav aria-label="Education navigation" className="order-3 flex w-full min-w-0 items-center gap-1 overflow-x-auto sm:order-2 sm:w-auto sm:flex-1 sm:justify-center">
+        <nav aria-label="Education navigation" className="order-3 flex w-full min-w-0 items-center gap-1 overflow-x-auto pt-1 sm:pt-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden lg:order-2 lg:w-auto lg:flex-1 lg:justify-center">
           <button
             type="button"
             onClick={() => navigateToSection("materials")}
-            className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 sm:px-3.5 sm:py-2 text-xs font-semibold transition-colors ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
           >
-            <House size={15} />
+            <House size={14} />
             <span>Home</span>
           </button>
           {([
@@ -4473,7 +4514,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
               type="button"
               onClick={() => navigateToSection(id)}
               aria-current={activeNav === id ? "page" : undefined}
-              className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${
+              className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 sm:px-3.5 sm:py-2 text-xs font-semibold transition-colors ${
                 activeNav === id
                   ? "bg-sky-700 text-white shadow-sm"
                   : isDarkMode
@@ -4481,27 +4522,54 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
                     : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"
               }`}
             >
-              <Icon size={15} />
+              <Icon size={14} />
               <span>{label}</span>
             </button>
           ))}
           <button
             type="button"
             onClick={() => setShowAbout(true)}
-            className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 sm:px-3.5 sm:py-2 text-xs font-semibold transition-colors ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
           >
-            <Info size={15} />
+            <Info size={14} />
             <span>About Us</span>
           </button>
           <a
             href="mailto:support@notivexa.com?subject=Notivexa%20AI%20Support"
-            className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors sm:px-3.5 ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            className={`hidden sm:flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${isDarkMode ? "text-[#C2C2B0] hover:bg-[#383832] hover:text-white" : "text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
           >
-            <Mail size={15} />
+            <Mail size={14} />
             <span>support@notivexa.com</span>
           </a>
         </nav>
-        <div className="order-2 ml-auto flex shrink-0 items-center gap-2 sm:order-3">
+        <div className="order-2 ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5 lg:order-3 min-w-0">
+          <label
+            title="Adjust application UI zoom scale for small windows or mobile view"
+            className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold transition-colors ${
+              isDarkMode
+                ? "border-[#4A4A3F] bg-[#2D2D2A] text-[#C2C2B0]"
+                : "border-slate-200 bg-slate-50 text-slate-700"
+            }`}
+          >
+            <span className="hidden sm:inline text-[9px] uppercase tracking-wider opacity-75">Zoom</span>
+            <select
+              value={uiZoomMode}
+              onChange={(e) =>
+                setUiZoomMode(e.target.value as "auto" | "0.65" | "0.75" | "0.85" | "0.92" | "1")
+              }
+              aria-label="UI Zoom Scale"
+              className="bg-transparent font-extrabold outline-none cursor-pointer text-[10px]"
+            >
+              <option value="auto" className="text-slate-900">
+                Auto ({Math.round(effectiveUiZoom * 100)}%)
+              </option>
+              <option value="0.65" className="text-slate-900">65%</option>
+              <option value="0.75" className="text-slate-900">75%</option>
+              <option value="0.85" className="text-slate-900">85%</option>
+              <option value="0.92" className="text-slate-900">92%</option>
+              <option value="1" className="text-slate-900">100%</option>
+            </select>
+          </label>
           <div className="relative">
             <button
               type="button"
@@ -4509,12 +4577,12 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
               aria-label="Notifications and recent study activity"
               aria-expanded={showNotifications}
               title="Notifications"
-              className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+              className={`flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
             >
-              <Bell size={17} />
+              <Bell size={15} />
             </button>
             {showNotifications && (
-              <div className={`absolute right-0 top-12 z-50 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border shadow-xl ${isDarkMode ? "border-[#383832] bg-[#22221F]" : "border-slate-200 bg-white"}`}>
+              <div className={`absolute right-0 top-11 z-50 w-72 sm:w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border shadow-xl ${isDarkMode ? "border-[#383832] bg-[#22221F]" : "border-slate-200 bg-white"}`}>
                 <div className={`border-b px-4 py-3 ${isDarkMode ? "border-[#383832]" : "border-slate-100"}`}>
                   <p className={`text-sm font-semibold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>Recent study activity</p>
                 </div>
@@ -4566,25 +4634,25 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
             onClick={() => { setShowSettings(true); setShowNotifications(false); }}
             aria-label="Settings"
             title="Settings"
-            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            className={`flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
           >
-            <Settings size={17} />
+            <Settings size={15} />
           </button>
           <button
             type="button"
             onClick={() => setShowAbout(true)}
             aria-label="About Notivexa AI"
             title="About"
-            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            className={`hidden sm:flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
           >
             <Info size={17} />
           </button>
           <button
             onClick={() => setIsDarkMode(!isDarkMode)}
             title={isDarkMode ? "Switch to Daylight Mode" : "Switch to Late-Night Study Dark Mode"}
-            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A] text-[#FACC15] hover:bg-[#383832]" : "border-slate-200 bg-white text-amber-600 hover:bg-slate-50"}`}
+            className={`flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A] text-[#FACC15] hover:bg-[#383832]" : "border-slate-200 bg-white text-amber-600 hover:bg-slate-50"}`}
           >
-            {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+            {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           <UserProfile 
             user={user} 
@@ -4595,58 +4663,78 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         </div>
       </header>
 
-      {/* Sidebar (Streamlit style) */}
+      {/* Compact Small-Size Sidebar (Side-by-Side on All Window Sizes) */}
       {isSidebarOpen && (
-      <div id="study-sidebar" className={`w-72 border-r flex flex-col h-full rounded-[24px] overflow-hidden z-10 transition-colors duration-300 ${
-        isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5] shadow-[0_8px_30px_rgba(0,0,0,0.32)]" : "bg-gradient-to-br from-white/92 via-sky-50/88 to-indigo-50/82 backdrop-blur-xl border-sky-100/80 text-slate-800 shadow-[0_10px_28px_rgba(38,73,112,0.12)]"
-      }
-`}>
-        
+      <div id="study-sidebar" className={`relative z-20 w-full h-full border-r flex flex-col rounded-[18px] overflow-hidden transition-all duration-300 ${
+        isDarkMode ? "bg-[#22221F] border-[#383832] text-[#E0E0D5] shadow-[0_6px_20px_rgba(0,0,0,0.3)]" : "bg-gradient-to-br from-white via-sky-50/95 to-indigo-50/90 backdrop-blur-xl border-sky-100/80 text-slate-800 shadow-[0_8px_24px_rgba(15,23,42,0.08)]"
+      }`}>
+        {/* Compact Sidebar Top Bar */}
+        <div className={`flex items-center justify-between px-2.5 py-2 border-b ${
+          isDarkMode ? "border-[#383832] bg-[#1C1C19]" : "border-slate-200/80 bg-white/90"
+        }`}>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-sky-600 to-indigo-600 text-white">
+              <Sparkles size={11} />
+            </span>
+            <span className={`text-[10px] font-extrabold uppercase tracking-wider truncate ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>
+              Study Tools
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(false)}
+            aria-label="Minimize sidebar"
+            title="Minimize sidebar"
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-colors ${
+              isDarkMode ? "border-[#383832] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200"
+            }`}
+          >
+            <X size={12} />
+          </button>
+        </div>
+
         {/* Scrollable middle container */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-2.5 space-y-3 min-h-0 custom-scrollbar">
           
           {/* Late-Night Study Mode Quick Switch */}
-          <div className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-2 ${
+          <div className={`p-2 rounded-xl border transition-all flex items-center justify-between gap-1.5 ${
             isDarkMode 
               ? "bg-[#2A2A26] border-[#45453B]" 
               : "bg-gradient-to-r from-sky-50/80 to-indigo-50/50 border-sky-200/60 shadow-xs"
-          }
-`}>
-            <div className="flex items-center gap-2.5">
-              <div className={`p-2 rounded-xl transition-colors ${isDarkMode ? "bg-[#383832] text-[#FACC15]" : "bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-xs"}`}>
-                {isDarkMode ? <Moon size={16} /> : <Sun size={16} />}
+          }`}>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className={`p-1.5 rounded-lg shrink-0 transition-colors ${isDarkMode ? "bg-[#383832] text-[#FACC15]" : "bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-xs"}`}>
+                {isDarkMode ? <Moon size={13} /> : <Sun size={13} />}
               </div>
-              <div>
-                <span className={`text-xs font-bold block transition-colors ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>
-                  {isDarkMode ? "Late-Night Mode" : "Daylight Mode"}
+              <div className="min-w-0">
+                <span className={`text-[11px] font-bold block truncate transition-colors ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>
+                  {isDarkMode ? "Night Mode" : "Daylight"}
                 </span>
-                <span className="text-[10px] text-slate-500">Eye-soothing study contrast</span>
+                <span className="text-[9px] text-slate-500 block truncate">Eye-soothing</span>
               </div>
             </div>
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
                 isDarkMode ? "bg-[#5A5A40]" : "bg-sky-500"
-              }
-`}
+              }`}
             >
               <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  isDarkMode ? "translate-x-6" : "translate-x-1"
-                }
-`}
+                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                  isDarkMode ? "translate-x-4" : "translate-x-1"
+                }`}
               />
             </button>
           </div>
 
           {/* Study Material Source */}
           <div id="material-source" className="scroll-mt-6">
-            <label className="text-xs font-semibold text-[#8A8A7A] uppercase tracking-widest mb-3 block">
+            <label className="text-[10px] font-bold text-[#8A8A7A] uppercase tracking-wider mb-2 block">
               Study Material Source
             </label>
             
             {/* Custom Tabs */}
-            <div className={`flex p-1 rounded-full border mb-4 transition-colors ${isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-slate-100/90 border-slate-200/80"}`}>
+            <div className={`flex p-0.5 rounded-full border mb-2.5 transition-colors ${isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-slate-100/90 border-slate-200/80"}`}>
               <button
                 onClick={() => {
                   setInputType("upload");
@@ -4693,7 +4781,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
                       const droppedFile = e.dataTransfer?.files?.[0];
                       if (droppedFile) void handleUploadFile(droppedFile, "Drag & Drop Digital Upload");
                     }}
-                    className={`min-w-0 flex-1 border-2 border-dashed rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all group ${
+                    className={`min-w-0 flex-1 border-2 border-dashed rounded-xl p-2.5 flex flex-col items-center justify-center text-center cursor-pointer transition-all group ${
                       isDraggingUpload
                         ? "border-sky-500 bg-sky-500/10 scale-[1.01]"
                         : isDarkMode
@@ -4701,22 +4789,22 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
                         : "border-sky-300/90 bg-gradient-to-b from-white to-sky-50/50 hover:bg-sky-50/80 hover:border-sky-500"
                     }`}
                   >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-2 shadow-2xs ${
+                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center mb-1 shadow-2xs ${
                       isDarkMode ? "bg-[#383832] text-sky-400" : "bg-sky-100 text-sky-700"
                     }`}>
-                      <Upload size={17} />
+                      <Upload size={14} />
                     </div>
-                    <span className={`text-xs font-bold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>
-                      Upload Digital Document File
+                    <span className={`text-[11px] font-bold leading-tight ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>
+                      Upload Document
                     </span>
-                    <span className="text-[10px] text-[#8A8A7A] mt-0.5 truncate max-w-[195px]">
-                      {file ? file.name : "Drag & drop or click to browse (Max 1GB)"}
+                    <span className="text-[9px] text-[#8A8A7A] mt-0.5 truncate max-w-[155px]">
+                      {file ? file.name : "Browse or drop file"}
                     </span>
-                    <div className="flex flex-wrap items-center justify-center gap-1 mt-2">
-                      {["PDF", "DOCX", "PPTX", "XLSX", "TXT/MD", "CSV", "IMG"].map((fmt) => (
+                    <div className="flex flex-wrap items-center justify-center gap-1 mt-1.5">
+                      {["PDF", "DOCX", "PPTX", "TXT", "IMG"].map((fmt) => (
                         <span
                           key={fmt}
-                          className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider ${
+                          className={`px-1 py-0.5 rounded text-[7px] font-extrabold uppercase tracking-wider ${
                             isDarkMode
                               ? "bg-[#2E2E29] text-[#C2C2B0] border border-[#45453B]"
                               : "bg-slate-100 text-slate-600 border border-slate-200"
@@ -5607,11 +5695,39 @@ This study companion has been successfully downloaded from your Notivexa AI Port
       </div>
       )}
       {/* Main Content Area */}
-      <div className={`relative z-10 min-w-0 overflow-auto bg-transparent p-8 transition-colors duration-300 ${isChatbotOpen ? "xl:pr-[432px]" : ""}`}>
-        <div className="mb-8 relative z-10">
+      <div className={`relative z-10 min-w-0 overflow-auto bg-transparent p-2 sm:p-4 lg:p-6 transition-colors duration-300 ${isChatbotOpen ? "xl:pr-[432px]" : ""}`}>
+        {/* Quick Bar when Sidebar is Minimized */}
+        {!isSidebarOpen && (
+          <div className={`flex items-center justify-between gap-2 mb-3 p-2 rounded-xl border shadow-xs ${
+            isDarkMode ? "bg-[#22221F]/95 border-[#383832]" : "bg-white/95 border-sky-200/80"
+          }`}>
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen(true)}
+              className="py-1.5 px-3 rounded-lg bg-gradient-to-r from-sky-600 to-indigo-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Sparkles size={13} />
+              <span>Show Study Sidebar</span>
+            </button>
+            <label className={`py-1.5 px-3 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shrink-0 ${
+              isDarkMode ? "border-sky-500/40 bg-sky-950/40 text-sky-300" : "border-sky-200 bg-sky-50 text-sky-700"
+            }`}>
+              <Upload size={13} />
+              <span>Upload File</span>
+              <input
+                type="file"
+                accept="application/pdf,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.odt,.rtf,.txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,.xml,.tex,image/*"
+                className="hidden"
+                onChange={handleUpload}
+              />
+            </label>
+          </div>
+        )}
+
+        <div className="mb-4 sm:mb-8 relative z-10">
           <Chatbot fileUri={fileData?.fileUri} mimeType={fileData?.mimeType} isDarkMode={isDarkMode} embedded={false} onOpenChange={setIsChatbotOpen} />
         </div>
-        <div id="learning-content" className={`${!resultText && !flashcards.length && !videoData && !slides.length ? "max-w-none" : "max-w-4xl"} mx-auto space-y-8 relative z-10 scroll-mt-6`}>
+        <div id="learning-content" className={`${!resultText && !flashcards.length && !videoData && !slides.length ? "max-w-none" : "max-w-4xl"} mx-auto space-y-5 sm:space-y-8 relative z-10 scroll-mt-6`}>
           {error && (
             <motion.div 
               initial={{ opacity: 0, y: -10 }}
@@ -6824,8 +6940,8 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                           resultType === 'exam-paper' ? 'exam-paper-table' : 'student-handwriting-table'
                         } mx-auto shadow-xl rounded-sm transition-all border border-slate-300/80 relative ${
                           isStudentSheet
-                            ? `${handwritingFont} text-xl px-10 pt-14 pb-5 bg-[#FCFBF7]` 
-                            : 'font-sans text-[#4A4A3F] p-10 rounded-lg bg-white'
+                            ? `${handwritingFont} text-lg sm:text-xl px-4 sm:px-10 pt-14 pb-5 bg-[#FCFBF7]` 
+                            : 'font-sans text-[#4A4A3F] p-4 sm:p-10 rounded-lg bg-white'
                         } ${isSingleHidden ? 'hidden' : ''}`}
                         style={getPageSheetStyle()}
                       >
@@ -6835,19 +6951,19 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                             <div className="absolute top-[54px] left-0 right-0 h-[4px] border-t-[1.5px] border-b-[1.5px] border-[#fca5a5] pointer-events-none" />
                             {/* Left Double Red Margin Rule */}
                             {pageStyle !== 'box' && (
-                              <div className="absolute left-[58px] top-0 bottom-0 w-[4px] border-l-[1.5px] border-r-[1.5px] border-[#fca5a5] pointer-events-none" />
+                              <div className="hidden sm:block absolute left-[58px] top-0 bottom-0 w-[4px] border-l-[1.5px] border-r-[1.5px] border-[#fca5a5] pointer-events-none" />
                             )}
                             {/* Left Binder Punch Holes */}
-                            <div className="absolute left-5 top-[18%] w-4 h-4 rounded-full bg-slate-200 border border-slate-300 shadow-inner pointer-events-none" />
-                            <div className="absolute left-5 top-[50%] w-4 h-4 rounded-full bg-slate-200 border border-slate-300 shadow-inner pointer-events-none" />
-                            <div className="absolute left-5 top-[82%] w-4 h-4 rounded-full bg-slate-200 border border-slate-300 shadow-inner pointer-events-none" />
+                            <div className="hidden sm:block absolute left-5 top-[18%] w-4 h-4 rounded-full bg-slate-200 border border-slate-300 shadow-inner pointer-events-none" />
+                            <div className="hidden sm:block absolute left-5 top-[50%] w-4 h-4 rounded-full bg-slate-200 border border-slate-300 shadow-inner pointer-events-none" />
+                            <div className="hidden sm:block absolute left-5 top-[82%] w-4 h-4 rounded-full bg-slate-200 border border-slate-300 shadow-inner pointer-events-none" />
 
                             {/* Handwritten Page/Date Corner Box */}
-                            <div className={`absolute top-2 right-7 border border-[#fca5a5] rounded px-3 py-0.5 bg-[#FCFBF7] text-sm leading-tight select-none not-prose shadow-[0_1px_2px_rgba(0,0,0,0.02)] ${penColor === 'blue' ? 'text-[#0f172a]' : 'text-[#1d4ed8]'}`}>
+                            <div className={`absolute top-2 right-3 sm:right-7 border border-[#fca5a5] rounded px-2.5 sm:px-3 py-0.5 bg-[#FCFBF7] text-xs sm:text-sm leading-tight select-none not-prose shadow-[0_1px_2px_rgba(0,0,0,0.02)] ${penColor === 'blue' ? 'text-[#0f172a]' : 'text-[#1d4ed8]'}`}>
                               <div><strong>Page No:</strong> {pageIdx + 1} / {pagesToRender.length}</div>
                               <div><strong>Date:</strong> {todayDateFormatted}</div>
                             </div>
-                            <div className="absolute top-[28px] left-[78px] text-[12px] font-bold text-rose-400 select-none uppercase tracking-widest opacity-80 pointer-events-none">
+                            <div className="absolute top-[28px] left-4 sm:left-[78px] text-[10px] sm:text-[12px] font-bold text-rose-400 select-none uppercase tracking-widest opacity-80 pointer-events-none truncate max-w-[52vw] sm:max-w-none">
                               {resultType === "verbatim-handwriting"
                                 ? "EXACT UPLOADED DOCUMENT • STUDENT HANDWRITING PAGE"
                                 : "STUDENT NOTEBOOK • A4 REVISION"}
@@ -6862,7 +6978,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                           </div>
                         )}
 
-                        <div className={`${isStudentSheet ? "pl-10" : ""}`}>
+                        <div className={`${isStudentSheet ? "pl-1 sm:pl-10" : ""}`}>
                           <div className="markdown-content">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm, remarkBreaks]}

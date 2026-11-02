@@ -218,3 +218,38 @@ div#root > div > div > div > div > div > div > div > div > div > div:nth-child(2
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Compact Small-Size Study Sidebar Rules */
+#study-sidebar {
+  font-size: 11px;
+}
+
+#study-sidebar .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.65rem;
+}
+
+#study-sidebar .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.5rem;
+}
+
+#study-sidebar .p-4 {
+  padding: 0.6rem;
+}
+
+#study-sidebar .p-3\.5 {
+  padding: 0.55rem;
+}
+
+#study-sidebar .p-3 {
+  padding: 0.5rem;
+}
+
+#study-sidebar button {
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+#study-sidebar .py-3 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
