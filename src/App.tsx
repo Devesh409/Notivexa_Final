@@ -3666,69 +3666,99 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
   const generatePPT = async () => {
     openPPTTopicStudio();
   };
-  const generateVideoExplanation = async () => {
+  const generateVideoExplanation = async (topicOverride?: string | React.MouseEvent) => {
     if (!fileData) return;
+    const effectiveFocus =
+      typeof topicOverride === "string" && topicOverride.trim().length > 0
+        ? topicOverride.trim()
+        : (activeScanFocusTopic || focusArea || "").trim();
+
     setLoading(true);
     setGeneratingType("video");
     setError(null);
     try {
-      // Client-side cache check to prevent double API calls & save quota
-      const cached = history.find(
-        (item) => item.fileUri === fileData.fileUri && item.type === "video");
-      if (cached) {
-        setVideoData(cached.videoData || null);
-        setResultType("video");
-        setResultText("");
-                setFlashcards([]);
-        setLessonPlan(null);
-        setLoading(false);
-        setGeneratingType("");
-        return;
+      // Client-side cache check to prevent double API calls & save quota (unless user explicitly requested a new custom topic)
+      if (typeof topicOverride !== "string") {
+        const cached = history.find(
+          (item) =>
+            item.fileUri === fileData.fileUri &&
+            item.type === "video" &&
+            (item.focusArea || "") === effectiveFocus
+        );
+        if (cached && cached.videoData) {
+          setVideoData(cached.videoData);
+          setResultType("video");
+          setResultText("");
+          setFlashcards([]);
+          setLessonPlan(null);
+          setShowDigitalScannerHub(false);
+          setLoading(false);
+          setGeneratingType("");
+          return;
+        }
       }
 
+      lastActionRef.current = () => generateVideoExplanation(typeof topicOverride === "string" ? topicOverride : undefined);
+      const fallbackDocText =
+        scannedDigitalText ||
+        extractedTextCacheRef.current.get(fileData.fileUri) ||
+        digitalScanReport?.textPreview ||
+        resultText ||
+        "";
 
-      lastActionRef.current = () => generateVideoExplanation();
       const data = await apiFetchJson("/api/generate-video-explanation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          fileUri: fileData.fileUri, 
+        body: JSON.stringify({
+          fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
-          focusArea: focusArea,
-          model: selectedAiModel
+          focusArea: effectiveFocus,
+          fallbackText: fallbackDocText,
+          model: selectedAiModel,
         }),
       });
-      
+
       setVideoData(data.video || null);
       setResultType("video");
       setResultText("");
-            setFlashcards([]);
+      setFlashcards([]);
       setLessonPlan(null);
+      setShowDigitalScannerHub(false);
+
+      if (data.video) {
+        setGeneratedFunctionsCache((prev) => ({
+          ...prev,
+          video: {
+            label: "Video Lecture",
+            resultType: "video",
+            videoData: data.video,
+          },
+        }));
+      }
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
-          title: file ? file.name : "Lecture Video",
+          title: effectiveFocus
+            ? `${file ? file.name : "Lecture Video"} — ${effectiveFocus}`
+            : file
+              ? file.name
+              : "Lecture Video",
           type: "video",
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
           resultText: "",
-
           flashcards: [],
           videoData: data.video || null,
-          focusArea: focusArea,
-          createdAt: serverTimestamp()
+          focusArea: effectiveFocus,
+          createdAt: serverTimestamp(),
         });
       }
-
-    }
- catch (err: any) {
+    } catch (err: any) {
       handleFetchError(err);
-    }
- finally {
+    } finally {
       setLoading(false);
       setGeneratingType("");
     }
-
   };
 
 
@@ -4290,21 +4320,8 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
             Welcome to <br />Notivexa <span className="bg-gradient-to-r from-sky-500 to-violet-600 bg-clip-text text-transparent">AI</span>
           </h1>
           <p className={`mb-6 text-sm leading-relaxed ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-            Sign in or use Fast Instant Access with Gemini 3.1 Flash Lite to generate notes, flashcards, and presentations immediately.
+            Sign in to generate notes, flashcards, and presentations immediately.
           </p>
-
-          <button
-            type="button"
-            onClick={() => {
-              sessionStorage.setItem("notivexa_quick_access", "true");
-              setIsQuickGuest(true);
-            }}
-            className="w-full mb-5 py-3.5 px-6 rounded-xl font-semibold text-white bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-600 hover:from-emerald-400 hover:to-sky-500 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2.5 transition-all active:scale-[0.98] text-sm"
-          >
-            <Sparkles size={17} />
-            <span>Fast Instant Access (Gemini 3.1 Flash Lite)</span>
-            <ArrowRight size={16} />
-          </button>
 
           <AuthForm isDarkMode={isDarkMode} />
           
@@ -4485,23 +4502,6 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           </a>
         </nav>
         <div className="order-2 ml-auto flex shrink-0 items-center gap-2 sm:order-3">
-          <div className="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-semibold transition-colors bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300">
-            <Sparkles size={13} className="shrink-0 text-emerald-500" />
-            <label htmlFor="ai-model-selector" className="sr-only">Select AI Model</label>
-            <select
-              id="ai-model-selector"
-              value={selectedAiModel}
-              onChange={(e) => setSelectedAiModel(e.target.value as any)}
-              title="Choose High-Speed AI Engine & Model"
-              className="bg-transparent font-semibold text-xs outline-none cursor-pointer"
-            >
-              <option value="groq-qwen-27b" className="text-slate-900">⚡ Groq Qwen 27B (Ultra-Fast 500+ tok/s)</option>
-              <option value="gemini-3.1-flash-lite" className="text-slate-900">🚀 Gemini 3.1 Flash Lite (Fast)</option>
-              <option value="gemini-3.8-flash" className="text-slate-900">🧠 Gemini 3.8 Flash (Balanced)</option>
-              <option value="gemini-flash-latest" className="text-slate-900">🔬 Gemini Flash Latest (Deep)</option>
-              <option value="claude-3-5-sonnet" className="text-slate-900">🌟 Anthropic Claude 3.5 Sonnet</option>
-            </select>
-          </div>
           <div className="relative">
             <button
               type="button"
@@ -4815,35 +4815,6 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
                 >
                   <FileText size={14} /> Paste / Create Digital Document File
                 </button>
-
-                {/* Quick Sample Digital Document Files in Upload System */}
-                <div className={`p-2.5 rounded-xl border ${
-                  isDarkMode ? "bg-[#262622] border-[#383832]" : "bg-slate-50/90 border-slate-200/80"
-                }`}>
-                  <p className="text-[9px] font-extrabold uppercase tracking-wider text-[#8A8A7A] mb-1.5">
-                    Instant Digital Document Files (1-Click Load):
-                  </p>
-                  <div className="space-y-1">
-                    {SAMPLE_DIGITAL_DOCUMENTS.map((sample) => (
-                      <button
-                        key={sample.id}
-                        type="button"
-                        disabled={loading}
-                        onClick={() => void handleUploadDirectDigitalDoc(sample.fileName, sample.content, sample.format)}
-                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[10px] font-semibold flex items-center justify-between gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
-                          isDarkMode
-                            ? "bg-[#22221F] hover:bg-[#32322D] text-[#E0E0D5] border border-[#383832]"
-                            : "bg-white hover:bg-sky-50 text-slate-700 border border-slate-200/80"
-                        }`}
-                      >
-                        <span className="truncate">📄 {sample.title}</span>
-                        <span className="shrink-0 text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-600 dark:text-sky-300">
-                          {sample.format.toUpperCase()}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
 
                 {fileData && (
                   <div className="grid grid-cols-1 gap-1.5">
@@ -6965,13 +6936,15 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           )}
           {resultType === "video" && videoData && (
             <VideoExplainer 
-              videoData={videoData} 
+              videoData={videoData}
+              onRegenerateTopic={(customTopic) => void generateVideoExplanation(customTopic)}
+              isRegenerating={loading && generatingType === "video"}
               onClose={() => {
                 setVideoData(null);
                 setResultType("");
-              }
-}
-            />)}
+              }}
+            />
+          )}
       {/* Live Page Scanner Modal Overlay */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 bg-[#3A3A2F]/60 backdrop-blur-sm flex items-center justify-center p-4">
