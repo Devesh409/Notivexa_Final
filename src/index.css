@@ -50,6 +50,17 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    background-color: #eaf1f7;
+  }
   *, ::before, ::after {
     border-color: #e0e0d5;
   }

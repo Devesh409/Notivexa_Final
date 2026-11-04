@@ -732,16 +732,53 @@ export default function App() {
   const [isChatbotOpen, setIsChatbotOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [uiZoomMode, setUiZoomMode] = useState<"auto" | "0.65" | "0.75" | "0.85" | "0.92" | "1">("auto");
-  const [windowWidth, setWindowWidth] = useState<number>(() =>
-    typeof window !== "undefined" ? window.innerWidth : 1280
-  );
+  const viewportWrapperRef = useRef<HTMLDivElement>(null);
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>(() => ({
+    width:
+      typeof window !== "undefined"
+        ? document.documentElement?.clientWidth || window.innerWidth
+        : 1280,
+    height:
+      typeof window !== "undefined"
+        ? window.visualViewport?.height || window.innerHeight || document.documentElement?.clientHeight
+        : 800,
+  }));
+  const windowWidth = viewportSize.width;
+  const windowHeight = viewportSize.height;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handleResize = () => setWindowWidth(window.innerWidth);
+    const handleResize = () => {
+      const el = viewportWrapperRef.current;
+      const width =
+        el?.clientWidth ||
+        document.documentElement?.clientWidth ||
+        window.innerWidth;
+      const height =
+        el?.clientHeight ||
+        window.visualViewport?.height ||
+        window.innerHeight ||
+        document.documentElement?.clientHeight;
+      setViewportSize((prev) =>
+        prev.width === width && prev.height === height ? prev : { width, height }
+      );
+    };
+    handleResize();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+    window.addEventListener("orientationchange", handleResize);
+    window.visualViewport?.addEventListener("resize", handleResize);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined" && viewportWrapperRef.current) {
+      observer = new ResizeObserver(handleResize);
+      observer.observe(viewportWrapperRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+      window.visualViewport?.removeEventListener("resize", handleResize);
+      observer?.disconnect();
+    };
+  }, [authLoading, user, isQuickGuest]);
 
   const effectiveUiZoom =
     uiZoomMode === "auto"
@@ -5255,21 +5292,38 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
 
   return (
     <div
-      style={{
-        zoom: effectiveUiZoom,
-        height: effectiveUiZoom !== 1 ? `${(100 / effectiveUiZoom).toFixed(3)}dvh` : "100dvh",
-        width: effectiveUiZoom !== 1 ? `${(100 / effectiveUiZoom).toFixed(3)}%` : "100%",
-      }}
-      className={`relative isolate grid ${
-        isSidebarOpen
-          ? "grid-cols-[185px_minmax(0,1fr)] sm:grid-cols-[205px_minmax(0,1fr)] lg:grid-cols-[225px_minmax(0,1fr)]"
-          : "grid-cols-1"
-      } grid-rows-[auto_minmax(0,1fr)] gap-1.5 sm:gap-2.5 overflow-hidden p-1.5 sm:p-2.5 font-sans transition-colors duration-300 ${
+      ref={viewportWrapperRef}
+      className={`fixed inset-0 w-full h-full overflow-hidden ${
         isDarkMode
           ? "bg-[#131311] text-[#E0E0D5] dark"
           : "bg-gradient-to-br from-[#dcebf1] via-[#eaf1f7] to-[#e5eaf4] text-slate-800"
       }`}
     >
+      <div
+        style={
+          effectiveUiZoom !== 1
+            ? {
+                zoom: effectiveUiZoom,
+                width: `${Math.ceil(windowWidth / effectiveUiZoom)}px`,
+                height: `${Math.ceil(windowHeight / effectiveUiZoom)}px`,
+                minHeight: `${Math.ceil(windowHeight / effectiveUiZoom)}px`,
+              }
+            : {
+                width: "100%",
+                height: "100%",
+                minHeight: "100%",
+              }
+        }
+        className={`relative isolate grid ${
+          isSidebarOpen
+            ? "grid-cols-[185px_minmax(0,1fr)] sm:grid-cols-[205px_minmax(0,1fr)] lg:grid-cols-[225px_minmax(0,1fr)]"
+            : "grid-cols-1"
+        } grid-rows-[auto_minmax(0,1fr)] gap-1.5 sm:gap-2.5 overflow-hidden p-1.5 sm:p-2.5 font-sans transition-colors duration-300 ${
+          isDarkMode
+            ? "bg-[#131311] text-[#E0E0D5] dark"
+            : "bg-gradient-to-br from-[#dcebf1] via-[#eaf1f7] to-[#e5eaf4] text-slate-800"
+        }`}
+      >
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
         <div
           className="absolute inset-0"
@@ -6938,8 +6992,8 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           )}
 
           {!fileData && !resultText && !flashcards.length && !videoData && (
-            <div className="relative z-0 flex min-h-[calc(100vh-14rem)] flex-col justify-center gap-5 overflow-hidden rounded-3xl bg-transparent py-5">
-              <div className="relative z-10 flex w-full flex-col items-center justify-center overflow-hidden px-4 pt-3 pb-1 text-center">
+            <div className="relative z-0 flex flex-col justify-start gap-3 sm:gap-5 overflow-hidden rounded-3xl bg-transparent py-1.5 sm:py-4">
+              <div className="relative z-10 flex w-full flex-col items-center justify-center overflow-hidden px-3 sm:px-4 pt-1 sm:pt-2 pb-1 text-center">
 
                         <motion.div
                           initial={{ opacity: 0, y: 12 }}
@@ -8741,6 +8795,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
