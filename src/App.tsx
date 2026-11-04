@@ -8,9 +8,28 @@ import { DigitalLessonPlanViewer, DigitalLessonPlan } from "./components/Digital
 import { LessonPlanGuidanceModal, LessonPlanConfig } from "./components/LessonPlanGuidanceModal";
 import { FlashcardStudio } from "./components/FlashcardStudio";
 import { TableUploadHandwritingModal, StructuredTablePayload } from "./components/TableUploadHandwritingModal";
+import { UserStorageVaultPanel } from "./components/UserStorageVaultPanel";
+import {
+  getEffectiveUserStorageKey,
+  saveStudyItemToVault,
+  listStudyItemsFromVault,
+  deleteStudyItemFromVault,
+  saveUploadedDocumentToVault,
+  getUploadedDocumentFromVault,
+  saveWorkspaceSnapshot,
+  loadWorkspaceSnapshot,
+  getStorageMetrics,
+  formatStorageBytes,
+  formatStorageGB,
+  USER_STORAGE_BASE_USED_BYTES,
+  USER_STORAGE_TOTAL_CAPACITY_BYTES,
+  type StoredStudyItem,
+  type StoredUploadedDocument,
+  type StorageCategoryMetrics,
+} from "./services/userStorage";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { motion } from "motion/react";
-import { BookOpen, GraduationCap, Upload, FileText, FileDown, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail, HardDrive, Lightbulb, ScanText, Settings2 } from "lucide-react";
+import { BookOpen, GraduationCap, Upload, FileText, FileDown, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail, HardDrive, Lightbulb, ScanText, Settings2, Database } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -25,7 +44,8 @@ import { UserProfile } from "./components/UserProfile";
 import { AuthForm } from "./components/AuthForm";
 import { MfaSettingsModal } from "./components/MfaSettingsModal";
 import { Chatbot } from "./components/Chatbot";
-import { LibraryPanel, type LibraryBook } from "./components/LibraryPanel";
+import { LibraryPanel, type LibraryBook, type LibraryBookSuggestionAction } from "./components/LibraryPanel";
+import { UploadedBookSuggestionsPanel, type UploadedBookSuggestionAction } from "./components/UploadedBookSuggestionsPanel";
 import { deleteSavedLibraryBook, getSavedLibraryBookFile, listSavedLibraryBooks, saveLibraryBook, type SavedLibraryBook } from "./components/libraryStorage";
 import { pickBookFromGoogleDrive, prepareGoogleDrivePicker } from "./components/googleDrive";
 
@@ -674,7 +694,9 @@ export function createColorSafeStyleProxy(style: CSSStyleDeclaration): CSSStyleD
 export default function App() {
   console.log("App component render started!");
   const [user, setUser] = useState<User | null>(null);
-  const [isQuickGuest, setIsQuickGuest] = useState<boolean>(() => typeof window !== "undefined" && sessionStorage.getItem("notivexa_quick_access") === "true");
+  const [isQuickGuest, setIsQuickGuest] = useState<boolean>(
+    () => typeof window === "undefined" || sessionStorage.getItem("notivexa_require_signin") !== "true"
+  );
   const [selectedAiModel, setSelectedAiModel] = useState<"gemini-3.1-flash-lite" | "gemini-3.8-flash" | "gemini-flash-latest" | "groq-qwen-27b" | "claude-3-5-sonnet">("gemini-3.1-flash-lite");
   const [authLoading, setAuthLoading] = useState(true);
   const [mode, setMode] = useState<Mode>("student");
@@ -687,7 +709,26 @@ export default function App() {
   const [generatingType, setGeneratingType] = useState<string>("");
   const [resultText, setResultText] = useState("");
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
-  const [activeNav, setActiveNav] = useState<"materials" | "library" | "tools" | "learning">("materials");
+  const [activeNav, setActiveNav] = useState<"materials" | "library" | "tools" | "learning" | "storage">("materials");
+  const [storageRefreshTick, setStorageRefreshTick] = useState<number>(0);
+  const userStorageKey = getEffectiveUserStorageKey(user?.uid, user?.email);
+  const [vaultMetrics, setVaultMetrics] = useState<StorageCategoryMetrics>({
+    totalItems: 0,
+    totalBytes: 0,
+    usedStorageBytes: USER_STORAGE_BASE_USED_BYTES,
+    totalCapacityBytes: USER_STORAGE_TOTAL_CAPACITY_BYTES,
+    availableStorageBytes: USER_STORAGE_TOTAL_CAPACITY_BYTES - USER_STORAGE_BASE_USED_BYTES,
+    usagePercentage: 0,
+    uploadedFilesCount: 0,
+    notesCount: 0,
+    questionsAndExamsCount: 0,
+    flashcardSetsCount: 0,
+    pptDecksCount: 0,
+    videoLecturesCount: 0,
+    lessonPlansCount: 0,
+    libraryBooksCount: 0,
+    lastSavedAtMs: null,
+  });
   const [isChatbotOpen, setIsChatbotOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [uiZoomMode, setUiZoomMode] = useState<"auto" | "0.65" | "0.75" | "0.85" | "0.92" | "1">("auto");
@@ -716,6 +757,7 @@ export default function App() {
       : parseFloat(uiZoomMode);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"general" | "storage">("general");
   const [showMfaModal, setShowMfaModal] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [slides, setSlides] = useState<Slide[]>([]);
@@ -823,6 +865,8 @@ export default function App() {
   const [personalLibraryBooks, setPersonalLibraryBooks] = useState<SavedLibraryBook[]>([]);
   const [busyLibraryBookId, setBusyLibraryBookId] = useState<string | null>(null);
   const notesViewerRef = useRef<HTMLDivElement>(null);
+  const extractedTextCacheRef = useRef<Map<string, string>>(new Map());
+  const hasRestoredWorkspaceRef = useRef<boolean>(false);
 
   const defaultLibraryBooks = [
     { id: "book:gatsby", title: "The Great Gatsby", author: "F. Scott Fitzgerald", desc: "A detailed exploration of wealth, love, obsession, and the American Dream.", department: "Arts" },
@@ -916,6 +960,18 @@ export default function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    void getStorageMetrics(userStorageKey)
+      .then((m) => {
+        if (isMounted) setVaultMetrics(m);
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [userStorageKey, storageRefreshTick, history.length, personalLibraryBooks.length]);
 
   useEffect(() => {
     setCurrentPageIndex(0);
@@ -1244,13 +1300,25 @@ export default function App() {
   const practiceSetsCount = uniqueHistoryItems.filter((item) => ["flashcards", "assessment", "question-bank", "exam-paper"].includes(item.type)).length;
   const studySourcesCount = new Set(uniqueHistoryItems.map((item) => item.fileUri).filter(Boolean)).size;
 
-  const navigateToSection = (section: "materials" | "library" | "tools" | "learning") => {
+  const navigateToSection = (section: "materials" | "library" | "tools" | "learning" | "storage") => {
+    if (section === "storage") {
+      setSettingsTab("storage");
+      setShowSettings(true);
+      return;
+    }
     setActiveNav(section);
     if (section === "materials" || section === "tools") {
       setIsSidebarOpen(true);
     }
     if (section === "materials") setInputType("upload");
-    const targetId = section === "library" ? "dashboard-library" : section === "tools" ? "learning-tools" : section === "learning" ? "learning-content" : "material-source";
+    const targetId =
+      section === "library"
+        ? "dashboard-library"
+        : section === "tools"
+          ? "learning-tools"
+          : section === "learning"
+            ? "learning-content"
+            : "material-source";
     requestAnimationFrame(() => {
       document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
@@ -1324,6 +1392,19 @@ export default function App() {
           setDetectedUnits(data.digitalScan.units);
         }
       }
+      await saveUploadedDocumentToVault(userStorageKey, {
+        id: `doc:${data.fileUri}`,
+        fileName: scannedFile.name,
+        mimeType: data.mimeType || "image/jpeg",
+        fileSize: scannedFile.size,
+        fileUri: data.fileUri,
+        uploadSource: "Optical Camera Scan",
+        extractedText: data.extractedText || data.digitalScan?.textPreview || "",
+        digitalScan: data.digitalScan || null,
+        detectedUnits: data.digitalScan?.units || [],
+        fileBlob: scannedFile,
+      });
+      setStorageRefreshTick((t) => t + 1);
     } catch (err) {
       handleFetchError(err);
     } finally {
@@ -1405,59 +1486,465 @@ export default function App() {
     setGeneratingType("");
   };
 
+  const persistStudyOutputToUserVault = async (
+    payload: Omit<StoredStudyItem, "id" | "userKey" | "createdAtMs" | "updatedAtMs" | "sizeBytes"> & {
+      id?: string;
+      createdAtMs?: number;
+    }
+  ) => {
+    const itemId =
+      payload.id ||
+      `vault:${payload.type}:${(payload.fileUri || payload.title || "doc").slice(-36)}:${Date.now()}`;
+    const storedItem = await saveStudyItemToVault(userStorageKey, {
+      id: itemId,
+      title: payload.title || "Untitled Study Output",
+      type: payload.type || "notes",
+      notesVersion: payload.notesVersion,
+      questionBankType: payload.questionBankType,
+      questionBankBloomLevel: payload.questionBankBloomLevel,
+      qbVersion: payload.qbVersion,
+      fileUri: payload.fileUri || "",
+      mimeType: payload.mimeType || "text/plain",
+      resultText: payload.resultText || "",
+      flashcards: payload.flashcards || [],
+      lessonPlan: payload.lessonPlan || null,
+      slides: payload.slides || [],
+      videoData: payload.videoData || null,
+      focusArea: payload.focusArea || "",
+      createdAt: payload.createdAtMs || Date.now(),
+      createdAtMs: payload.createdAtMs || Date.now(),
+    });
+    setHistory((prev) => {
+      const filtered = prev.filter(
+        (existing) =>
+          existing.id !== storedItem.id &&
+          !(
+            existing.fileUri === storedItem.fileUri &&
+            existing.type === storedItem.type &&
+            existing.title === storedItem.title &&
+            (existing.questionBankType || "") === (storedItem.questionBankType || "")
+          )
+      );
+      return [storedItem as unknown as HistoryItem, ...filtered];
+    });
+    setStorageRefreshTick((t) => t + 1);
+    return storedItem;
+  };
+
   useEffect(() => {
+    let isMounted = true;
+    setHistoryLoading(true);
+
+    const loadFromLocalVault = async () => {
+      try {
+        const localItems = await listStudyItemsFromVault(userStorageKey);
+        if (!isMounted) return;
+        const normalizedLocal: HistoryItem[] = localItems.map((item) => ({
+          id: item.id,
+          title: item.title || "Untitled Document",
+          type: item.type || "notes",
+          notesVersion: item.notesVersion,
+          questionBankType: item.questionBankType as any,
+          questionBankBloomLevel: item.questionBankBloomLevel as any,
+          fileUri: item.fileUri || "",
+          mimeType: item.mimeType || "",
+          resultText: normalizeGeneratedContent(item.resultText || ""),
+          flashcards: normalizeGeneratedFlashcards(item.flashcards || []),
+          lessonPlan: item.lessonPlan || null,
+          slides: item.slides || undefined,
+          videoData: item.videoData || null,
+          focusArea: item.focusArea || "",
+          createdAt: item.createdAt || item.createdAtMs,
+        }));
+        setHistory((prev) => {
+          const mergedMap = new Map<string, HistoryItem>();
+          for (const it of [...normalizedLocal, ...prev]) {
+            const key = `${it.fileUri || it.id}|${it.type}|${it.title}|${it.questionBankType || ""}`;
+            if (!mergedMap.has(key)) mergedMap.set(key, it);
+          }
+          return Array.from(mergedMap.values());
+        });
+      } catch (e) {
+        console.warn("Could not load local vault study items:", e);
+      } finally {
+        if (isMounted && !user) {
+          setHistoryLoading(false);
+        }
+      }
+    };
+
+    void loadFromLocalVault();
+
     if (!user) {
-      setHistory([]);
-      setHistoryLoading(false);
-      return;
+      return () => {
+        isMounted = false;
+      };
     }
 
-    setHistoryLoading(true);
     const q = query(
       collection(db, "users", user.uid, "documents"),
-      orderBy("createdAt", "desc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: HistoryItem[] = [];
-      snapshot.forEach((docSnapshot) => {
-        const data = docSnapshot.data();
-        items.push({
-          id: docSnapshot.id,
-          title: data.title || "Untitled Document",
-          type: data.type || "notes",
-          notesVersion: data.notesVersion,
-          fileUri: data.fileUri || "",
-          mimeType: data.mimeType || "",
-          resultText: normalizeGeneratedContent(data.resultText || ""),
-
-          flashcards: normalizeGeneratedFlashcards(data.flashcards || []),
-          lessonPlan: data.lessonPlan || null,
-          focusArea: data.focusArea || "",
-          createdAt: data.createdAt,
+      orderBy("createdAt", "desc")
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      async (snapshot) => {
+        const firestoreItems: HistoryItem[] = [];
+        snapshot.forEach((docSnapshot) => {
+          const data = docSnapshot.data();
+          const item: HistoryItem = {
+            id: docSnapshot.id,
+            title: data.title || "Untitled Document",
+            type: data.type || "notes",
+            notesVersion: data.notesVersion,
+            questionBankType: data.questionBankType,
+            questionBankBloomLevel: data.questionBankBloomLevel,
+            fileUri: data.fileUri || "",
+            mimeType: data.mimeType || "",
+            resultText: normalizeGeneratedContent(data.resultText || ""),
+            flashcards: normalizeGeneratedFlashcards(data.flashcards || []),
+            lessonPlan: data.lessonPlan || null,
+            slides: data.slides || undefined,
+            videoData: data.videoData || null,
+            focusArea: data.focusArea || "",
+            createdAt: data.createdAt,
+          };
+          firestoreItems.push(item);
         });
+
+        const localItems = await listStudyItemsFromVault(userStorageKey);
+        const normalizedLocal: HistoryItem[] = localItems.map((item) => ({
+          id: item.id,
+          title: item.title || "Untitled Document",
+          type: item.type || "notes",
+          notesVersion: item.notesVersion,
+          questionBankType: item.questionBankType as any,
+          questionBankBloomLevel: item.questionBankBloomLevel as any,
+          fileUri: item.fileUri || "",
+          mimeType: item.mimeType || "",
+          resultText: normalizeGeneratedContent(item.resultText || ""),
+          flashcards: normalizeGeneratedFlashcards(item.flashcards || []),
+          lessonPlan: item.lessonPlan || null,
+          slides: item.slides || undefined,
+          videoData: item.videoData || null,
+          focusArea: item.focusArea || "",
+          createdAt: item.createdAt,
+        }));
+
+        const mergedMap = new Map<string, HistoryItem>();
+        for (const it of [...firestoreItems, ...normalizedLocal]) {
+          const key = `${it.fileUri || it.id}|${it.type}|${it.title}|${it.questionBankType || ""}`;
+          if (!mergedMap.has(key)) mergedMap.set(key, it);
+        }
+
+        if (isMounted) {
+          setHistory(Array.from(mergedMap.values()));
+          setHistoryLoading(false);
+        }
+      },
+      (err) => {
+        console.error("Error fetching document history:", err);
+        if (isMounted) setHistoryLoading(false);
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [user, userStorageKey, storageRefreshTick]);
+
+  // Restore last active workspace snapshot from user storage on startup
+  useEffect(() => {
+    let cancelled = false;
+    hasRestoredWorkspaceRef.current = false;
+    const restoreSnapshot = async () => {
+      try {
+        const snap = await loadWorkspaceSnapshot(userStorageKey);
+        if (cancelled || !snap) return;
+        if (snap.preferences) {
+          if (snap.preferences.mode) setMode(snap.preferences.mode as any);
+          if (snap.preferences.pageStyle) setPageStyle(snap.preferences.pageStyle as any);
+          if (snap.preferences.penColor) setPenColor(snap.preferences.penColor as any);
+          if (snap.preferences.handwritingFont) setHandwritingFont(snap.preferences.handwritingFont as any);
+          if (typeof snap.preferences.isDarkMode === "boolean") setIsDarkMode(snap.preferences.isDarkMode);
+          if (snap.preferences.uiZoomMode) setUiZoomMode(snap.preferences.uiZoomMode as any);
+          if (snap.preferences.selectedAiModel) setSelectedAiModel(snap.preferences.selectedAiModel as any);
+          if (snap.preferences.focusArea) setFocusArea(snap.preferences.focusArea);
+          if (snap.preferences.selectedUnit) setSelectedUnit(snap.preferences.selectedUnit);
+          if (snap.preferences.selectedChapter) setSelectedChapter(snap.preferences.selectedChapter);
+        }
+        if (snap.completedSessions && typeof snap.completedSessions === "object" && !Array.isArray(snap.completedSessions)) {
+          setCompletedSessions(snap.completedSessions as Record<string, boolean>);
+        }
+        // Only auto-restore workspace document if none is currently loaded
+        if (!fileData && snap.activeFileUri) {
+          const storedDoc = await getUploadedDocumentFromVault(snap.activeFileUri).catch(() => null);
+          const restoredText =
+            snap.scannedDigitalText ||
+            storedDoc?.extractedText ||
+            snap.digitalScanReport?.textPreview ||
+            "";
+          const hasBinaryBlob = Boolean(storedDoc?.blob && storedDoc.blob.size > 0);
+          const isSpecialUri =
+            snap.activeFileUri.startsWith("book:") ||
+            snap.activeFileUri.startsWith("link:") ||
+            snap.activeFileUri.startsWith("text:");
+
+          const effectiveUri =
+            hasBinaryBlob || isSpecialUri
+              ? snap.activeFileUri
+              : restoredText
+              ? `text:restored-${encodeURIComponent(snap.activeFileName || "doc")}`
+              : snap.activeFileUri;
+          const effectiveMime =
+            hasBinaryBlob
+              ? snap.activeMimeType || storedDoc?.mimeType || "application/pdf"
+              : isSpecialUri
+              ? snap.activeMimeType || "text/plain"
+              : "text/plain";
+
+          setFileData({
+            fileUri: effectiveUri,
+            mimeType: effectiveMime,
+          });
+
+          if (hasBinaryBlob && storedDoc?.blob) {
+            setFile(
+              new File([storedDoc.blob], snap.activeFileName || storedDoc.fileName || "Document.pdf", {
+                type: effectiveMime,
+              })
+            );
+          } else if (restoredText && snap.activeFileName) {
+            const safeTxtName = snap.activeFileName.replace(/\.[^.]+$/, "") + ".txt";
+            setFile(new File([restoredText], safeTxtName, { type: "text/plain" }));
+          }
+
+          if (restoredText) {
+            setScannedDigitalText(restoredText);
+            extractedTextCacheRef.current.set(effectiveUri, restoredText);
+            extractedTextCacheRef.current.set(snap.activeFileUri, restoredText);
+          }
+          if (snap.digitalScanReport) {
+            setDigitalScanReport(snap.digitalScanReport);
+          }
+          if (Array.isArray(snap.detectedUnits) && snap.detectedUnits.length > 0) {
+            setDetectedUnits(snap.detectedUnits);
+          }
+          if (snap.generatedFunctionsCache && Object.keys(snap.generatedFunctionsCache).length > 0) {
+            setGeneratedFunctionsCache(snap.generatedFunctionsCache);
+          }
+          if (snap.resultType) {
+            setResultType(snap.resultType as any);
+          }
+          if (snap.resultText) {
+            setResultText(snap.resultText);
+            setShowDigitalScannerHub(false);
+          }
+          if (snap.activeMultiFunctionTitle) {
+            setActiveMultiFunctionTitle(snap.activeMultiFunctionTitle);
+          }
+          if (Array.isArray(snap.flashcards) && snap.flashcards.length > 0) {
+            setFlashcards(snap.flashcards);
+          }
+          if (Array.isArray(snap.slides) && snap.slides.length > 0) {
+            setSlides(snap.slides);
+          }
+          if (snap.videoData) {
+            setVideoData(snap.videoData);
+          }
+          if (snap.lessonPlan) {
+            setLessonPlan(snap.lessonPlan);
+          }
+        }
+      } catch (err) {
+        console.warn("Could not restore workspace snapshot:", err);
+      } finally {
+        if (!cancelled) {
+          hasRestoredWorkspaceRef.current = true;
+        }
+      }
+    };
+    void restoreSnapshot();
+    return () => {
+      cancelled = true;
+    };
+  }, [userStorageKey]);
+
+  // Auto-save active workspace & preferences into user storage
+  useEffect(() => {
+    if (!hasRestoredWorkspaceRef.current) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceSnapshot(userStorageKey, {
+        activeFileName: file?.name || digitalScanReport?.documentTitle || "",
+        activeFileUri: fileData?.fileUri || "",
+        activeMimeType: fileData?.mimeType || "",
+        scannedDigitalText,
+        digitalScanReport,
+        detectedUnits,
+        resultText,
+        resultType,
+        activeMultiFunctionTitle,
+        flashcards,
+        slides,
+        videoData,
+        lessonPlan,
+        generatedFunctionsCache,
+        completedSessions,
+        preferences: {
+          mode,
+          pageStyle,
+          penColor,
+          handwritingFont,
+          isDarkMode,
+          uiZoomMode,
+          selectedAiModel,
+          focusArea,
+          selectedUnit,
+          selectedChapter,
+        },
       });
-      setHistory(items);
-      setHistoryLoading(false);
-    }, (err) => {
-      console.error("Error fetching document history:", err);
-      setHistoryLoading(false);
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    userStorageKey,
+    file,
+    fileData,
+    scannedDigitalText,
+    digitalScanReport,
+    detectedUnits,
+    resultText,
+    resultType,
+    activeMultiFunctionTitle,
+    flashcards,
+    slides,
+    videoData,
+    lessonPlan,
+    generatedFunctionsCache,
+    completedSessions,
+    mode,
+    pageStyle,
+    penColor,
+    handwritingFont,
+    isDarkMode,
+    uiZoomMode,
+    selectedAiModel,
+    focusArea,
+    selectedUnit,
+    selectedChapter,
+  ]);
+
+  const handleSaveCurrentWorkspaceToVault = async () => {
+    await saveWorkspaceSnapshot(userStorageKey, {
+      activeFileName: file?.name || digitalScanReport?.documentTitle || "",
+      activeFileUri: fileData?.fileUri || "",
+      activeMimeType: fileData?.mimeType || "",
+      scannedDigitalText,
+      digitalScanReport,
+      detectedUnits,
+      resultText,
+      resultType,
+      activeMultiFunctionTitle,
+      flashcards,
+      slides,
+      videoData,
+      lessonPlan,
+      generatedFunctionsCache,
+      completedSessions,
+      preferences: {
+        mode,
+        pageStyle,
+        penColor,
+        handwritingFont,
+        isDarkMode,
+        uiZoomMode,
+        selectedAiModel,
+        focusArea,
+        selectedUnit,
+        selectedChapter,
+      },
     });
+    if (fileData && (resultText || flashcards.length > 0 || slides.length > 0 || videoData || lessonPlan)) {
+      await persistStudyOutputToUserVault({
+        title:
+          activeMultiFunctionTitle ||
+          file?.name ||
+          digitalScanReport?.documentTitle ||
+          "Saved Workspace Study Output",
+        type: resultType || (flashcards.length > 0 ? "flashcards" : "notes"),
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText,
+        flashcards,
+        lessonPlan,
+        slides,
+        videoData,
+        focusArea,
+      });
+    }
+    setStorageRefreshTick((t) => t + 1);
+  };
 
-    return () => unsubscribe();
-  }, [user]);
+  const handleOpenStoredUploadFromVault = async (docMeta: StoredUploadedDocument) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const storedRecord = await getUploadedDocumentFromVault(docMeta.id);
+      const docText = storedRecord?.extractedText || docMeta.extractedText || docMeta.digitalScan?.textPreview || "";
+      const hasBinaryBlob = Boolean(storedRecord?.blob && storedRecord.blob.size > 0);
+      let activeFileObj: File | null = null;
+      let effectiveUri = docMeta.fileUri;
+      let effectiveMime = docMeta.mimeType || "text/plain";
 
-  const handleSelectHistoryItem = (item: HistoryItem) => {
+      if (hasBinaryBlob && storedRecord?.blob) {
+        activeFileObj = new File([storedRecord.blob], docMeta.fileName, {
+          type: docMeta.mimeType || "application/octet-stream",
+        });
+      } else if (docText) {
+        const safeTxtName = (docMeta.fileName || "Document").replace(/\.[^.]+$/, "") + ".txt";
+        activeFileObj = new File([docText], safeTxtName, {
+          type: "text/plain",
+        });
+        if (!effectiveUri.startsWith("text:") && !effectiveUri.startsWith("book:") && !effectiveUri.startsWith("link:")) {
+          effectiveUri = `text:vault-${encodeURIComponent(docMeta.id || docMeta.fileName)}`;
+        }
+        effectiveMime = "text/plain";
+      }
+
+      if (activeFileObj) {
+        setFile(activeFileObj);
+      }
+      setFileData({ fileUri: effectiveUri, mimeType: effectiveMime });
+      if (docText) {
+        setScannedDigitalText(docText);
+        extractedTextCacheRef.current.set(effectiveUri, docText);
+        extractedTextCacheRef.current.set(docMeta.fileUri, docText);
+      }
+      if (docMeta.digitalScan) {
+        setDigitalScanReport(docMeta.digitalScan);
+      }
+      if (Array.isArray(docMeta.detectedUnits) && docMeta.detectedUnits.length > 0) {
+        setDetectedUnits(docMeta.detectedUnits);
+      }
+      setShowDigitalScannerHub(true);
+      setActiveNav("materials");
+    } catch (err) {
+      handleFetchError(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectHistoryItem = (item: HistoryItem | StoredStudyItem) => {
     if (item.title && item.title.startsWith("scan-")) {
       setInputType("scan");
-    }
- else {
+    } else {
       setInputType("upload");
     }
-
 
     setFileData({ fileUri: item.fileUri, mimeType: item.mimeType });
     setGeneratedResultText(item.resultText || "");
     setResultType(item.type as any);
-        setGeneratedFlashcards(item.flashcards || []);
+    setGeneratedFlashcards(item.flashcards || []);
     setLessonPlan(item.lessonPlan || null);
     setVideoData(item.videoData || null);
     setShowDigitalScannerHub(false);
@@ -1465,13 +1952,20 @@ export default function App() {
       setFocusArea(item.focusArea);
       setSelectedPPTTopic(item.focusArea);
     }
-    if (item.slides) {
+    if (item.slides && item.slides.length > 0) {
       setSlides(item.slides);
     }
-
+    if (activeNav === "storage") {
+      setActiveNav("learning");
+    }
   };
 
-  const handleStudyLibraryBook = async (book: LibraryBook) => {
+  const pendingBookSuggestionRef = useRef<UploadedBookSuggestionAction | null>(null);
+
+  const handleStudyLibraryBook = async (
+    book: LibraryBook,
+    suggestionAction?: LibraryBookSuggestionAction
+  ) => {
     setBusyLibraryBookId(book.id);
     setLoading(true);
     setError(null);
@@ -1494,6 +1988,22 @@ export default function App() {
         uploadedText = data.extractedText;
       } else if (book.storageType === "link" && book.sourceUrl) {
         fileUri = `link:${book.sourceUrl}`;
+      }
+
+      if (suggestionAction) {
+        const mappedAction: UploadedBookSuggestionAction =
+          suggestionAction === "questions"
+            ? { type: "questions-short" }
+            : suggestionAction === "question-bank"
+              ? { type: "question-bank-all" }
+              : suggestionAction === "flashcards"
+                ? { type: "flashcards" }
+                : suggestionAction === "exam-paper"
+                  ? { type: "exam-paper-university" }
+                  : suggestionAction === "notes"
+                    ? { type: "notes" }
+                    : { type: "ppt" };
+        pendingBookSuggestionRef.current = mappedAction;
       }
 
       setFileData({ fileUri, mimeType });
@@ -1529,7 +2039,7 @@ export default function App() {
     }
   };
 
-  const handleAddBookLink = async (rawUrl: string, department: string) => {
+  const handleAddBookLink = async (rawUrl: string, department: string): Promise<LibraryBook> => {
     let sourceUrl: URL;
     try {
       sourceUrl = new URL(rawUrl);
@@ -1598,9 +2108,10 @@ export default function App() {
     };
     await saveLibraryBook(book);
     setPersonalLibraryBooks((current) => [book, ...current]);
+    return book;
   };
 
-  const handleAddLocalBook = async (fileToSave: File, department: string) => {
+  const handleAddLocalBook = async (fileToSave: File, department: string): Promise<LibraryBook> => {
     const validDigitalDoc = /\.(pdf|docx|doc|pptx|ppt|xlsx|xls|odt|rtf|txt|md|markdown|csv|tsv|json|html|htm|xml|tex)$/i.test(fileToSave.name) ||
       fileToSave.type === "application/pdf" ||
       fileToSave.type.startsWith("text/") ||
@@ -1621,6 +2132,7 @@ export default function App() {
     };
     await saveLibraryBook(book, fileToSave);
     setPersonalLibraryBooks((current) => [book, ...current]);
+    return book;
   };
 
   const handleRemoveLibraryBook = async (book: LibraryBook) => {
@@ -1671,19 +2183,21 @@ This study companion can be uploaded to the study panel to generate notes, asses
 
   const handleDeleteHistoryItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!user) return;
     setDeletingHistoryId(id);
     setHistoryDeleteError(null);
     try {
-      await deleteDoc(doc(db, "users", user.uid, "documents", id));
-    }
- catch (err) {
+      await deleteStudyItemFromVault(id, userStorageKey);
+      setHistory((prev) => prev.filter((item) => item.id !== id));
+      if (user && !id.startsWith("vault:")) {
+        await deleteDoc(doc(db, "users", user.uid, "documents", id));
+      }
+      setStorageRefreshTick((t) => t + 1);
+    } catch (err) {
       console.error("Error deleting document from history:", err);
       setHistoryDeleteError("Could not remove this study activity. Please try again.");
     } finally {
       setDeletingHistoryId(null);
     }
-
   };
 
   const handleSignIn = async () => {
@@ -1737,6 +2251,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
   };
 
   const handleSignOut = () => {
+    sessionStorage.setItem("notivexa_require_signin", "true");
     sessionStorage.removeItem("notivexa_quick_access");
     setIsQuickGuest(false);
     signOut(auth);
@@ -1891,8 +2406,6 @@ This study companion can be uploaded to the study panel to generate notes, asses
     handleStopSpeech();
   }, [resultText]);
 
-  const extractedTextCacheRef = useRef<Map<string, string>>(new Map());
-
   const apiFetchJson = async (url: string, options?: RequestInit, retries = 3): Promise<any> => {
     let attempt = 0;
     let hasAutoReuploaded = false;
@@ -1905,10 +2418,14 @@ This study companion can be uploaded to the study panel to generate notes, asses
         const parsed = JSON.parse(currentOptions.body);
         if (parsed && typeof parsed === "object" && parsed.fileUri) {
           parsed.hasLocalFile = Boolean(file);
-          parsed.fallbackTitle = parsed.fallbackTitle || file?.name || "";
+          parsed.fallbackTitle = parsed.fallbackTitle || file?.name || digitalScanReport?.documentTitle || "";
           parsed.fallbackFocus = parsed.fallbackFocus || focusArea || "";
           if (!parsed.fallbackText) {
-            let cachedText = extractedTextCacheRef.current.get(parsed.fileUri) || "";
+            let cachedText =
+              extractedTextCacheRef.current.get(parsed.fileUri) ||
+              scannedDigitalText ||
+              digitalScanReport?.textPreview ||
+              "";
             if (!cachedText && typeof window !== "undefined") {
               try {
                 cachedText = sessionStorage.getItem(`notivexa_doc_text_${parsed.fileUri}`) || "";
@@ -2264,6 +2781,20 @@ This study companion can be uploaded to the study panel to generate notes, asses
         void scanDigitalDocument(data.fileUri, data.mimeType, selectedFile.name, false);
       }
 
+      await saveUploadedDocumentToVault(userStorageKey, {
+        id: `doc:${data.fileUri}`,
+        fileName: selectedFile.name,
+        mimeType: data.mimeType || selectedFile.type || "application/octet-stream",
+        fileSize: selectedFile.size,
+        fileUri: data.fileUri,
+        uploadSource,
+        extractedText: data.extractedText || data.digitalScan?.textPreview || "",
+        digitalScan: data.digitalScan || null,
+        detectedUnits: data.digitalScan?.units || [],
+        fileBlob: selectedFile,
+      });
+      setStorageRefreshTick((t) => t + 1);
+
       // Immediately render the uploaded document same-to-same in the interface so the user can view and fast-download the exact pages right away
       const isTabularUpload = /\.(xlsx|xls|csv|tsv)$/i.test(selectedFile.name);
       await convertDocumentSameToSameHandwriting(
@@ -2497,6 +3028,19 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         }
       }
 
+      await saveUploadedDocumentToVault(userStorageKey, {
+        id: `doc:${data.fileUri}`,
+        fileName,
+        mimeType: data.mimeType || mimeType,
+        fileSize: syntheticFile.size,
+        fileUri: data.fileUri,
+        uploadSource: "Direct Digital Document Studio",
+        extractedText: data.extractedText || cleanContent,
+        digitalScan: data.digitalScan || null,
+        detectedUnits: data.digitalScan?.units || [],
+        fileBlob: syntheticFile,
+      });
+
       await convertDocumentSameToSameHandwriting(
         data.fileUri,
         data.mimeType || mimeType,
@@ -2636,6 +3180,17 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         ? `${file ? file.name : "Study Notes"} - ${finalUnit !== "all" ? finalUnit : ""} ${finalChapter !== "all" ? finalChapter : ""}`.trim()
         : (file ? file.name : "Study Notes");
 
+      await persistStudyOutputToUserVault({
+        title: noteTitle,
+        type: "notes",
+        notesVersion: data.notesVersion ?? 5,
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: generatedNotes,
+        flashcards: [],
+        focusArea: focusArea,
+      });
+
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
           title: noteTitle,
@@ -2693,6 +3248,16 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
       setGeneratedResultText(generatedAssessment);
       setResultType("assessment");
             setFlashcards([]);
+
+      await persistStudyOutputToUserVault({
+        title: file ? file.name : "Assessment Paper",
+        type: "assessment",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: generatedAssessment,
+        flashcards: [],
+        focusArea: focusArea,
+      });
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -2785,6 +3350,19 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           resultType: "question-bank",
         },
       }));
+
+      await persistStudyOutputToUserVault({
+        title: file ? file.name : "Question Bank",
+        type: "question-bank",
+        questionBankType: activeQuestionType,
+        questionBankBloomLevel: questionBankBloomLevel,
+        qbVersion: 3,
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: generatedQuestionBank,
+        flashcards: [],
+        focusArea: focusArea,
+      });
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -2882,6 +3460,17 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
+      await persistStudyOutputToUserVault({
+        title: plan.title || (file ? file.name : "Study Lesson Plan"),
+        type: "lesson-plan",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: generatedLessonPlan,
+        flashcards: [],
+        lessonPlan: normalizedPlan,
+        focusArea: activeFocus,
+      });
+
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
           title: plan.title || (file ? file.name : "Study Lesson Plan"),
@@ -2946,6 +3535,16 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         flashcards: { label: "Pastel Flashcards", flashcards: generatedFlashcards },
       }));
       
+      await persistStudyOutputToUserVault({
+        title: file ? file.name : "Flashcard Set",
+        type: "flashcards",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: "",
+        flashcards: generatedFlashcards,
+        focusArea: focusArea,
+      });
+
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
           title: file ? file.name : "Flashcard Set",
@@ -3027,6 +3626,16 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           resultType: functionType,
         },
       }));
+
+      await persistStudyOutputToUserVault({
+        title: `${file ? file.name : "Document"} - ${titleLabel}`,
+        type: functionType,
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: generatedContent,
+        flashcards: [],
+        focusArea: activeFocus,
+      });
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -3148,6 +3757,16 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
+      await persistStudyOutputToUserVault({
+        title: titleLabel,
+        type: "verbatim-handwriting",
+        fileUri: activeUri || data.fileUri || "",
+        mimeType: activeMime,
+        resultText: verbatimPages,
+        flashcards: [],
+        focusArea: tableMode || tableData ? "Handwritten Table Form (1:1)" : "Exact Same-to-Same Verbatim Document",
+      });
+
       if (user) {
         try {
           await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -3207,6 +3826,18 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           setDetectedUnits(uploaded.digitalScan.units);
         }
       }
+      await saveUploadedDocumentToVault(userStorageKey, {
+        id: `doc:${uploaded.fileUri}`,
+        fileName: selectedFile.name,
+        mimeType: uploaded.mimeType || selectedFile.type || "application/octet-stream",
+        fileSize: selectedFile.size,
+        fileUri: uploaded.fileUri,
+        uploadSource: useTableMode ? "Table Form Upload" : "Verbatim Handwriting Upload",
+        extractedText: uploaded.extractedText || uploaded.digitalScan?.textPreview || "",
+        digitalScan: uploaded.digitalScan || null,
+        detectedUnits: uploaded.digitalScan?.units || [],
+        fileBlob: selectedFile,
+      });
       await convertDocumentSameToSameHandwriting(
         uploaded.fileUri,
         uploaded.mimeType,
@@ -3398,6 +4029,44 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
+      await persistStudyOutputToUserVault({
+        title: `${file ? file.name : "Document"} - Executive Summary & Digest`,
+        type: "executive-summary",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: summaryText,
+        flashcards: [],
+        focusArea: activeFocus,
+      });
+      await persistStudyOutputToUserVault({
+        title: `${file ? file.name : "Document"} - 5M Short Questions`,
+        type: "question-bank",
+        questionBankType: "short",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: shortQText,
+        flashcards: [],
+        focusArea: activeFocus,
+      });
+      await persistStudyOutputToUserVault({
+        title: `${file ? file.name : "Document"} - High-Yield Exam Cheat Sheet`,
+        type: "cheat-sheet",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: cheatText,
+        flashcards: [],
+        focusArea: activeFocus,
+      });
+      await persistStudyOutputToUserVault({
+        title: `${file ? file.name : "Document"} - Pastel Flashcards`,
+        type: "flashcards",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: "",
+        flashcards: cardsList,
+        focusArea: activeFocus,
+      });
+
       // Display the 5-Mark Short Questions first so user can switch across all 4 functions in 1 click
       setGeneratedResultText(shortQText);
       setResultType("question-bank");
@@ -3562,45 +4231,75 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
       pres.writeFile({ fileName: `Notivexa_${safeTopic}_Presentation.pptx` });
     } catch (error) {
       console.error("Error creating PPTX", error);
-      alert("Failed to create PPTX file.");
+      setError("Failed to create PPTX file. Please try again.");
     }
   };
 
-  const generateExamPaper = async () => {
+  const generateExamPaper = async (paperTypeOverride?: string | React.MouseEvent) => {
     if (!fileData) return;
+    const effectivePaperType =
+      typeof paperTypeOverride === "string" && paperTypeOverride.trim()
+        ? paperTypeOverride.trim()
+        : examPaperType;
+    if (effectivePaperType !== examPaperType) {
+      setExamPaperType(effectivePaperType);
+    }
     setLoading(true);
     setGeneratingType("exam-paper");
     setError(null);
     try {
       // Client-side cache check to prevent double API calls & save quota
       const cached = history.find(
-        (item) => item.fileUri === fileData.fileUri && item.type === "question-bank" && item.questionBankType === examPaperType && item.questionBankBloomLevel === questionBankBloomLevel && (item as any).qbVersion === 3);
+        (item) => item.fileUri === fileData.fileUri && item.type === "question-bank" && item.questionBankType === effectivePaperType && item.questionBankBloomLevel === questionBankBloomLevel && (item as any).qbVersion === 3);
       if (cached) {
         setGeneratedResultText(cached.resultText || "");
         setResultType("exam-paper");
         setGeneratedFlashcards([]);
+        setShowDigitalScannerHub(false);
         setLoading(false);
         setGeneratingType("");
         return;
       }
 
-      lastActionRef.current = () => generateExamPaper();
+      lastActionRef.current = () => generateExamPaper(effectivePaperType);
       const data = await apiFetchJson("/api/generate-question-bank", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileUri: fileData.fileUri, mimeType: fileData.mimeType, questionType: examPaperType, bloomLevel: questionBankBloomLevel, mode: mode, totalMarks: examPaperType === "paper-university" ? universityMarks : undefined }),
+        body: JSON.stringify({ fileUri: fileData.fileUri, mimeType: fileData.mimeType, questionType: effectivePaperType, bloomLevel: questionBankBloomLevel, mode: mode, totalMarks: effectivePaperType === "paper-university" ? universityMarks : undefined }),
       });
       
       const generatedExamPaper = normalizeGeneratedContent(data.result || "");
       setGeneratedResultText(generatedExamPaper);
       setResultType("exam-paper");
       setGeneratedFlashcards([]);
+      setShowDigitalScannerHub(false);
+      setGeneratedFunctionsCache((prev) => ({
+        ...prev,
+        "exam-paper": {
+          label: "University Exam Paper",
+          resultText: generatedExamPaper,
+          resultType: "exam-paper",
+        },
+      }));
+
+      await persistStudyOutputToUserVault({
+        title: `${file ? file.name : "Exam Paper"} (${effectivePaperType})`,
+        type: "exam-paper",
+        questionBankType: effectivePaperType,
+        questionBankBloomLevel: questionBankBloomLevel,
+        qbVersion: 3,
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: generatedExamPaper,
+        flashcards: [],
+        focusArea: focusArea,
+      });
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
           title: file ? file.name : "Question Bank",
           type: "question-bank",
-          questionBankType: examPaperType,
+          questionBankType: effectivePaperType,
           questionBankBloomLevel: questionBankBloomLevel,
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
@@ -3619,9 +4318,97 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
     }
   };
 
+  const handleRunUploadedBookSuggestion = async (action: UploadedBookSuggestionAction) => {
+    if (!fileData) {
+      setError("Please upload a book or document first.");
+      return;
+    }
+
+    if (action.focusTopic !== undefined) {
+      setActiveScanFocusTopic(action.focusTopic);
+      setFocusArea(action.focusTopic);
+    }
+
+    switch (action.type) {
+      case "questions-short":
+      case "question-bank-short":
+        await generateQuestionBank("short");
+        break;
+      case "questions-long":
+      case "question-bank-long":
+        await generateQuestionBank("long");
+        break;
+      case "questions-viva":
+        await generateDocFunction("viva-qa");
+        break;
+      case "questions-assessment":
+        await generateAssessment();
+        break;
+      case "question-bank-all":
+        await generateQuestionBank("all");
+        break;
+      case "question-bank-mcq":
+        await generateQuestionBank("mcq");
+        break;
+      case "flashcards":
+        await generateFlashcards();
+        break;
+      case "exam-paper-full":
+        await generateExamPaper("paper-full");
+        break;
+      case "exam-paper-university":
+        await generateExamPaper("paper-university");
+        break;
+      case "exam-paper-mcq":
+        await generateExamPaper("paper-mcq");
+        break;
+      case "notes":
+        await generateNotes();
+        break;
+      case "cheat-sheet":
+        await generateDocFunction("cheat-sheet");
+        break;
+      case "formula-sheet":
+        await generateDocFunction("formula-sheet");
+        break;
+      case "executive-summary":
+        await generateDocFunction("executive-summary");
+        break;
+      case "verbatim-handwriting":
+        await convertDocumentSameToSameHandwriting(undefined, undefined, undefined, undefined, false);
+        break;
+      case "ppt":
+        openPPTTopicStudio();
+        break;
+      case "video":
+        await generateVideoExplanation(action.focusTopic);
+        break;
+      case "lesson-plan":
+        setShowLessonPlanGuidanceModal(true);
+        break;
+      case "mindmap-atlas":
+        await generateDocFunction("mindmap-atlas");
+        break;
+      case "batch-pack":
+        await handleBatchGenerateStudyPack();
+        break;
+      default:
+        await generateQuestionBank("all");
+    }
+  };
+
+  useEffect(() => {
+    if (fileData && pendingBookSuggestionRef.current) {
+      const pending = pendingBookSuggestionRef.current;
+      pendingBookSuggestionRef.current = null;
+      void handleRunUploadedBookSuggestion(pending);
+    }
+  }, [fileData]);
+
   const openPPTTopicStudio = () => {
     if (!fileData) {
-      alert("Please upload or choose a document first to generate presentations based on its topics.");
+      setError("Please upload or choose a digital document first to generate presentations based on its topics.");
+      navigateToSection("materials");
       return;
     }
     setShowPPTStudioModal(true);
@@ -3666,6 +4453,17 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         setSlides(data.ppt.slides);
         setResultType("ppt");
         setShowPPTStudioModal(false);
+
+        await persistStudyOutputToUserVault({
+          title: `${file ? file.name : "Document"} - ${topic}`,
+          type: "ppt",
+          fileUri: fileData.fileUri,
+          mimeType: fileData.mimeType,
+          resultText: "",
+          flashcards: [],
+          slides: data.ppt.slides,
+          focusArea: topic,
+        });
 
         if (user) {
           await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -3763,6 +4561,21 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           },
         }));
       }
+
+      await persistStudyOutputToUserVault({
+        title: effectiveFocus
+          ? `${file ? file.name : "Lecture Video"} — ${effectiveFocus}`
+          : file
+            ? file.name
+            : "Lecture Video",
+        type: "video",
+        fileUri: fileData.fileUri,
+        mimeType: fileData.mimeType,
+        resultText: "",
+        flashcards: [],
+        videoData: data.video || null,
+        focusArea: effectiveFocus,
+      });
 
       if (user) {
         await addDoc(collection(db, "users", user.uid, "documents"), {
@@ -4385,6 +5198,18 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
                 Sign in with Google
               </>
             )}
+            </button>
+          <button
+            type="button"
+            onClick={() => {
+              sessionStorage.removeItem("notivexa_require_signin");
+              sessionStorage.setItem("notivexa_quick_access", "true");
+              setIsQuickGuest(true);
+            }}
+            className="mt-2.5 w-full py-3 px-6 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-md shadow-emerald-500/20 cursor-pointer"
+          >
+            <Sparkles size={16} />
+            <span>Continue to Study Workspace (Instant Access)</span>
           </button>
 
           {signInError && (
@@ -4432,8 +5257,10 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
     <div
       style={{
         zoom: effectiveUiZoom,
+        height: effectiveUiZoom !== 1 ? `${(100 / effectiveUiZoom).toFixed(3)}dvh` : "100dvh",
+        width: effectiveUiZoom !== 1 ? `${(100 / effectiveUiZoom).toFixed(3)}%` : "100%",
       }}
-      className={`relative isolate grid h-dvh w-full ${
+      className={`relative isolate grid ${
         isSidebarOpen
           ? "grid-cols-[185px_minmax(0,1fr)] sm:grid-cols-[205px_minmax(0,1fr)] lg:grid-cols-[225px_minmax(0,1fr)]"
           : "grid-cols-1"
@@ -4631,12 +5458,21 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           </div>
           <button
             type="button"
-            onClick={() => { setShowSettings(true); setShowNotifications(false); }}
-            aria-label="Settings"
-            title="Settings"
-            className={`flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full border transition-colors ${isDarkMode ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832]" : "border-slate-200 bg-white text-slate-600 hover:bg-sky-50 hover:text-sky-800"}`}
+            onClick={() => {
+              setSettingsTab("general");
+              setShowSettings(true);
+              setShowNotifications(false);
+            }}
+            aria-label="Settings and My Storage"
+            title="Settings (Check My Storage & Preferences)"
+            className={`flex h-8 sm:h-10 items-center justify-center gap-1.5 rounded-full border px-2.5 sm:px-3.5 text-xs font-semibold transition-colors cursor-pointer ${
+              isDarkMode
+                ? "border-[#4A4A3F] text-[#C2C2B0] hover:bg-[#383832] hover:text-white"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-sky-50 hover:text-sky-800"
+            }`}
           >
             <Settings size={15} />
+            <span className="hidden md:inline">Settings</span>
           </button>
           <button
             type="button"
@@ -4888,6 +5724,26 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Smart Suggestions for Uploaded Book in Left Sidebar */}
+                {(file || fileData) && (
+                  <UploadedBookSuggestionsPanel
+                    bookTitle={file?.name || digitalScanReport?.documentTitle || "Uploaded Study Book"}
+                    scanReport={digitalScanReport}
+                    detectedUnits={detectedUnits}
+                    activeFocusArea={activeScanFocusTopic}
+                    onSelectFocusArea={(topic) => {
+                      setActiveScanFocusTopic(topic);
+                      setFocusArea(topic);
+                    }}
+                    onRunSuggestion={(action) => void handleRunUploadedBookSuggestion(action)}
+                    isGenerating={loading}
+                    generatingType={generatingType}
+                    generatedFunctionsList={Object.keys(generatedFunctionsCache)}
+                    isDarkMode={isDarkMode}
+                    compact
+                  />
                 )}
 
                 {/* Paste / Create Digital Document File Button */}
@@ -5794,7 +6650,22 @@ This study companion has been successfully downloaded from your Notivexa AI Port
               </button>
             </motion.div>)}
 
-          {activeNav === "library" ? (
+          {activeNav === "storage" ? (
+            <div id="user-storage-vault">
+              <UserStorageVaultPanel
+                userKey={userStorageKey}
+                userEmail={user?.email || (isQuickGuest ? "Primary Workspace Profile" : undefined)}
+                isDarkMode={isDarkMode}
+                personalLibraryBooks={personalLibraryBooks}
+                onOpenStudyItem={(item) => handleSelectHistoryItem(item)}
+                onOpenUploadedDocument={(docMeta) => void handleOpenStoredUploadFromVault(docMeta)}
+                onOpenLibraryBook={(book) => void handleStudyLibraryBook(book)}
+                onSaveCurrentWorkspaceNow={handleSaveCurrentWorkspaceToVault}
+                onUploadFileToStorage={(uploadedFile) => handleUploadFile(uploadedFile, "User Storage Vault (3GB)")}
+                onVaultChanged={() => setStorageRefreshTick((t) => t + 1)}
+              />
+            </div>
+          ) : activeNav === "library" ? (
             <LibraryPanel
               books={allLibraryBooks}
               searchQuery={searchQuery}
@@ -5804,6 +6675,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
               selectedFileUri={fileData?.fileUri}
               isDarkMode={isDarkMode}
               onStudyBook={handleStudyLibraryBook}
+              onStudyBookWithAction={(book, action) => handleStudyLibraryBook(book, action)}
               onDownloadBook={handleDownloadLibraryBook}
               onAddBookLink={handleAddBookLink}
               onAddLocalBook={handleAddLocalBook}
@@ -6007,6 +6879,26 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                 </div>
               )}
             </div>
+          )}
+
+          {/* Uploaded Book & Document Smart AI Suggestions Hub */}
+          {fileData && (
+            <UploadedBookSuggestionsPanel
+              bookTitle={file?.name || digitalScanReport?.documentTitle || "Uploaded Study Book"}
+              scanReport={digitalScanReport}
+              detectedUnits={detectedUnits}
+              activeFocusArea={activeScanFocusTopic}
+              onSelectFocusArea={(topic) => {
+                setActiveScanFocusTopic(topic);
+                setFocusArea(topic);
+              }}
+              onRunSuggestion={(action) => void handleRunUploadedBookSuggestion(action)}
+              onTriggerMultiFunction={(funcId) => void handleTriggerMultiFunction(funcId)}
+              isGenerating={loading}
+              generatingType={generatingType}
+              generatedFunctionsList={Object.keys(generatedFunctionsCache)}
+              isDarkMode={isDarkMode}
+            />
           )}
 
           {/* Digital Document Scanner & Multi-Function Generator Hub */}
@@ -6350,6 +7242,41 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       </div>
                     ))}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => navigateToSection("storage")}
+                    className={`mt-3 w-full rounded-xl border p-3 text-left transition-all cursor-pointer ${
+                      isDarkMode
+                        ? "border-[#45453B] bg-[#2A2A26] hover:border-sky-500/50"
+                        : "border-sky-200/80 bg-gradient-to-r from-sky-50/70 via-white to-indigo-50/60 hover:border-sky-400"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <span className={`flex items-center gap-1.5 text-xs font-extrabold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-800"}`}>
+                        <Database size={14} className="text-sky-600" />
+                        User Storage System
+                      </span>
+                      <span className="rounded-full bg-sky-500/15 border border-sky-500/30 px-2 py-0.5 text-[10px] font-extrabold text-sky-700 dark:text-sky-300">
+                        {formatStorageBytes(vaultMetrics.usedStorageBytes)} Used of {formatStorageGB(vaultMetrics.totalCapacityBytes)} Min Storage
+                      </span>
+                    </div>
+                    <div className={`h-2 w-full overflow-hidden rounded-full border ${isDarkMode ? "border-[#383832] bg-[#1C1C19]" : "border-slate-200 bg-slate-100"}`}>
+                      <div
+                        style={{
+                          width: `${
+                            vaultMetrics.usedStorageBytes > 0
+                              ? Math.min(100, Math.max(2, vaultMetrics.usagePercentage))
+                              : 0
+                          }%`,
+                        }}
+                        className="h-full rounded-full bg-gradient-to-r from-sky-500 via-indigo-600 to-violet-600 transition-all duration-500"
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[10px] font-semibold text-slate-500 dark:text-[#A1A194]">
+                      <span>{formatStorageBytes(vaultMetrics.usedStorageBytes)} Used ({vaultMetrics.usagePercentage}%) • {formatStorageGB(vaultMetrics.availableStorageBytes)} Free Space ({vaultMetrics.totalItems} Records)</span>
+                      <span className="text-sky-600 dark:text-sky-400 font-bold">Check Storage in Settings →</span>
+                    </div>
+                  </button>
                 </section>
               </motion.div>
 
@@ -7252,65 +8179,326 @@ This study companion has been successfully downloaded from your Notivexa AI Port
         isDarkMode={isDarkMode}
       />
       {showSettings && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && setShowSettings(false)}>
-          <section role="dialog" aria-modal="true" aria-labelledby="settings-title" className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${isDarkMode ? "border-[#383832] bg-[#22221F] text-[#E0E0D5]" : "border-slate-200 bg-white text-slate-800"}`}>
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h2 id="settings-title" className="text-lg font-semibold">Study settings</h2>
-                <p className={`mt-1 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Personalize your reading page.</p>
-              </div>
-              <button type="button" onClick={() => setShowSettings(false)} aria-label="Close settings" className={`flex h-9 w-9 items-center justify-center rounded-full ${isDarkMode ? "hover:bg-[#383832]" : "hover:bg-slate-100"}`}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="space-y-4">
-              <label className="flex items-center justify-between gap-4 text-sm">
-                <span>Page style</span>
-                <select value={pageStyle} onChange={(event) => setPageStyle(event.target.value)} className={`rounded-lg border px-3 py-2 text-xs outline-none ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"}`}>
-                  <option value="plain">Plain</option>
-                  <option value="ruled">Ruled</option>
-                  <option value="box">Grid</option>
-                </select>
-              </label>
-              <label className="flex items-center justify-between gap-4 text-sm">
-                <span>Ink color</span>
-                <select value={penColor} onChange={(event) => setPenColor(event.target.value)} className={`rounded-lg border px-3 py-2 text-xs outline-none ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"}`}>
-                  <option value="blue">Blue</option>
-                  <option value="black">Black</option>
-                </select>
-              </label>
-              <label className="flex items-center justify-between gap-4 text-sm">
-                <span>Handwriting font</span>
-                <select value={handwritingFont} onChange={(event) => setHandwritingFont(event.target.value)} className={`max-w-44 rounded-lg border px-3 py-2 text-xs outline-none ${isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"}`}>
-                  <option value="font-handwriting">Caveat</option>
-                  <option value="font-handwriting-indie">Indie Flower</option>
-                  <option value="font-handwriting-kalam">Kalam</option>
-                  <option value="font-handwriting-shadows">Shadows Into Light</option>
-                  <option value="font-handwriting-patrick">Patrick Hand</option>
-                </select>
-              </label>
-              <div className={`pt-4 border-t ${isDarkMode ? "border-[#383832]" : "border-slate-100"}`}>
-                <div className="flex items-center justify-between">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-3 sm:p-5 backdrop-blur-sm"
+          onMouseDown={(event) => event.target === event.currentTarget && setShowSettings(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            className={`w-full ${
+              settingsTab === "storage" ? "max-w-5xl" : "max-w-xl"
+            } max-h-[90vh] flex flex-col overflow-hidden rounded-2xl border shadow-2xl transition-all ${
+              isDarkMode ? "border-[#383832] bg-[#22221F] text-[#E0E0D5]" : "border-slate-200 bg-white text-slate-800"
+            }`}
+          >
+            {/* Settings Header & Tab Switcher */}
+            <div className={`flex flex-col gap-3 border-b px-5 py-4 ${isDarkMode ? "border-[#383832] bg-[#1C1C19]" : "border-slate-200 bg-slate-50/80"}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white shadow-sm">
+                    <Settings size={18} />
+                  </div>
                   <div>
-                    <span className="block text-sm font-semibold">Two-Factor Authentication</span>
-                    <span className={`block text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
-                      SMS OTP protection for sign in
+                    <h2 id="settings-title" className="text-base sm:text-lg font-bold leading-tight">
+                      Settings
+                    </h2>
+                    <p className={`text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
+                      Manage your workspace preferences, security, and My Storage (3 GB minimum capacity).
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  aria-label="Close settings"
+                  className={`flex h-9 w-9 items-center justify-center rounded-full transition-colors cursor-pointer ${
+                    isDarkMode ? "hover:bg-[#383832]" : "hover:bg-slate-200/70"
+                  }`}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Settings Navigation Tabs: General vs My Storage */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("general")}
+                  className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+                    settingsTab === "general"
+                      ? "bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm"
+                      : isDarkMode
+                        ? "bg-[#2A2A26] text-[#C2C2B0] hover:bg-[#383832]"
+                        : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  <Settings size={14} />
+                  General Settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("storage")}
+                  className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer ${
+                    settingsTab === "storage"
+                      ? "bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm"
+                      : isDarkMode
+                        ? "bg-[#2A2A26] text-[#C2C2B0] hover:bg-[#383832]"
+                        : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  <Database size={14} />
+                  <span>My Storage</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                      settingsTab === "storage"
+                        ? "bg-white/20 text-white"
+                        : isDarkMode
+                          ? "bg-sky-500/20 text-sky-300"
+                          : "bg-sky-100 text-sky-700"
+                    }`}
+                  >
+                    {formatStorageBytes(vaultMetrics.usedStorageBytes)} / {formatStorageGB(vaultMetrics.totalCapacityBytes)}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Settings Body */}
+            <div className="overflow-y-auto p-5 space-y-5">
+              {settingsTab === "general" ? (
+                <>
+                  {/* My Storage Option inside Settings */}
+                  <div
+                    className={`rounded-2xl border p-4 transition-all ${
+                      isDarkMode
+                        ? "border-sky-500/30 bg-gradient-to-br from-[#2A2A26] to-[#1E232A]"
+                        : "border-sky-200 bg-gradient-to-br from-sky-50/80 via-white to-indigo-50/60"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
+                            isDarkMode
+                              ? "border-sky-500/40 bg-sky-500/15 text-sky-300"
+                              : "border-sky-200 bg-sky-100/80 text-sky-600"
+                          }`}
+                        >
+                          <HardDrive size={20} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-sm font-extrabold">My Storage</h3>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                                isDarkMode
+                                  ? "border-indigo-400/30 bg-indigo-500/20 text-indigo-300"
+                                  : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                              }`}
+                            >
+                              {vaultMetrics.usagePercentage}% Used
+                            </span>
+                          </div>
+                          <p className={`mt-0.5 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-600"}`}>
+                            {formatStorageBytes(vaultMetrics.usedStorageBytes)} actually used from{" "}
+                            {formatStorageGB(vaultMetrics.totalCapacityBytes)} minimum storage ({vaultMetrics.totalItems} saved items)
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setSettingsTab("storage")}
+                        className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:from-sky-400 hover:to-indigo-500 transition-all cursor-pointer"
+                      >
+                        <Database size={14} />
+                        Check My Storage
+                      </button>
+                    </div>
+
+                    {/* Storage Breakdown Mini Cards */}
+                    <div className="mt-3.5 grid grid-cols-3 gap-2.5">
+                      <div
+                        className={`rounded-xl border px-3 py-2 ${
+                          isDarkMode ? "border-sky-500/30 bg-sky-500/10" : "border-sky-200 bg-white"
+                        }`}
+                      >
+                        <span className="block text-[10px] font-extrabold uppercase tracking-wider text-sky-600 dark:text-sky-400">
+                          Used Data
+                        </span>
+                        <span className="mt-0.5 block text-sm font-black">
+                          {formatStorageBytes(vaultMetrics.usedStorageBytes)}
+                        </span>
+                      </div>
+                      <div
+                        className={`rounded-xl border px-3 py-2 ${
+                          isDarkMode ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-200 bg-white"
+                        }`}
+                      >
+                        <span className="block text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                          Free Space
+                        </span>
+                        <span className="mt-0.5 block text-sm font-black">
+                          {formatStorageGB(vaultMetrics.availableStorageBytes)}
+                        </span>
+                      </div>
+                      <div
+                        className={`rounded-xl border px-3 py-2 ${
+                          isDarkMode ? "border-indigo-500/30 bg-indigo-500/10" : "border-indigo-200 bg-white"
+                        }`}
+                      >
+                        <span className="block text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                          Total Storage
+                        </span>
+                        <span className="mt-0.5 block text-sm font-black">
+                          {formatStorageGB(vaultMetrics.totalCapacityBytes)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Storage Progress Bar */}
+                    <div className="mt-3">
+                      <div
+                        className={`h-2.5 w-full overflow-hidden rounded-full border ${
+                          isDarkMode ? "border-[#383832] bg-[#161614]" : "border-slate-200 bg-slate-100"
+                        }`}
+                      >
+                        <div
+                          style={{
+                            width: `${
+                              vaultMetrics.usedStorageBytes > 0
+                                ? Math.min(100, Math.max(2, vaultMetrics.usagePercentage))
+                                : 0
+                            }%`,
+                          }}
+                          className="h-full rounded-full bg-gradient-to-r from-sky-500 via-indigo-600 to-violet-600 transition-all duration-500"
+                        />
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between text-[10px] font-bold text-slate-500 dark:text-[#A1A194]">
+                        <span>0 GB</span>
+                        <span className="text-sky-600 dark:text-sky-400">
+                          • {formatStorageBytes(vaultMetrics.usedStorageBytes)} Used ({vaultMetrics.usagePercentage}%)
+                        </span>
+                        <span>{formatStorageGB(vaultMetrics.totalCapacityBytes)} Min Storage</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reading & Notebook Preferences */}
+                  <div className="space-y-4">
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400 dark:text-[#A1A194]">
+                      Reading & Notebook Preferences
+                    </h3>
+                    <label className="flex items-center justify-between gap-4 text-sm">
+                      <span>Page style</span>
+                      <select
+                        value={pageStyle}
+                        onChange={(event) => setPageStyle(event.target.value)}
+                        className={`rounded-lg border px-3 py-2 text-xs outline-none ${
+                          isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <option value="plain">Plain</option>
+                        <option value="ruled">Ruled</option>
+                        <option value="box">Grid</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center justify-between gap-4 text-sm">
+                      <span>Ink color</span>
+                      <select
+                        value={penColor}
+                        onChange={(event) => setPenColor(event.target.value)}
+                        className={`rounded-lg border px-3 py-2 text-xs outline-none ${
+                          isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <option value="blue">Blue</option>
+                        <option value="black">Black</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center justify-between gap-4 text-sm">
+                      <span>Handwriting font</span>
+                      <select
+                        value={handwritingFont}
+                        onChange={(event) => setHandwritingFont(event.target.value)}
+                        className={`max-w-44 rounded-lg border px-3 py-2 text-xs outline-none ${
+                          isDarkMode ? "border-[#4A4A3F] bg-[#2D2D2A]" : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <option value="font-handwriting">Caveat</option>
+                        <option value="font-handwriting-indie">Indie Flower</option>
+                        <option value="font-handwriting-kalam">Kalam</option>
+                        <option value="font-handwriting-shadows">Shadows Into Light</option>
+                        <option value="font-handwriting-patrick">Patrick Hand</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {/* Two-Factor Authentication */}
+                  <div className={`pt-4 border-t ${isDarkMode ? "border-[#383832]" : "border-slate-100"}`}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="block text-sm font-semibold">Two-Factor Authentication</span>
+                        <span className={`block text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
+                          SMS OTP protection for sign in
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSettings(false);
+                          setShowMfaModal(true);
+                        }}
+                        className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 shadow-sm transition-all cursor-pointer"
+                      >
+                        Configure 2FA
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsTab("general")}
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                        isDarkMode
+                          ? "border-[#45453B] bg-[#2A2A26] text-[#E0E0D5] hover:bg-[#383832]"
+                          : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      ← Back to General Settings
+                    </button>
+                    <span className={`text-xs font-medium ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
+                      Settings → My Storage Vault
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
+                  <UserStorageVaultPanel
+                    userKey={userStorageKey}
+                    userEmail={user?.email || (isQuickGuest ? "Primary Workspace Profile" : undefined)}
+                    isDarkMode={isDarkMode}
+                    personalLibraryBooks={personalLibraryBooks}
+                    onOpenStudyItem={(item) => {
                       setShowSettings(false);
-                      setShowMfaModal(true);
+                      handleSelectHistoryItem(item);
                     }}
-                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 shadow-sm transition-all"
-                  >
-                    Configure 2FA
-                  </button>
+                    onOpenUploadedDocument={(docMeta) => {
+                      setShowSettings(false);
+                      void handleOpenStoredUploadFromVault(docMeta);
+                    }}
+                    onOpenLibraryBook={(book) => {
+                      setShowSettings(false);
+                      void handleStudyLibraryBook(book);
+                    }}
+                    onSaveCurrentWorkspaceNow={handleSaveCurrentWorkspaceToVault}
+                    onUploadFileToStorage={(uploadedFile) => handleUploadFile(uploadedFile, "User Storage Vault (3GB)")}
+                    onVaultChanged={() => setStorageRefreshTick((t) => t + 1)}
+                  />
                 </div>
-              </div>
-
-
+              )}
             </div>
           </section>
         </div>

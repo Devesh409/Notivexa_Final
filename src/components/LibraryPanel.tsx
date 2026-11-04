@@ -34,6 +34,14 @@ export interface LibraryBook {
   fileName?: string;
 }
 
+export type LibraryBookSuggestionAction =
+  | "questions"
+  | "question-bank"
+  | "flashcards"
+  | "exam-paper"
+  | "notes"
+  | "ppt";
+
 interface LibraryPanelProps {
   books: LibraryBook[];
   searchQuery: string;
@@ -43,9 +51,10 @@ interface LibraryPanelProps {
   selectedFileUri?: string;
   isDarkMode: boolean;
   onStudyBook: (book: LibraryBook) => void | Promise<void>;
+  onStudyBookWithAction?: (book: LibraryBook, action: LibraryBookSuggestionAction) => void | Promise<void>;
   onDownloadBook: (book: LibraryBook) => void | Promise<void>;
-  onAddBookLink: (url: string, department: string) => Promise<void>;
-  onAddLocalBook: (file: File, department: string) => Promise<void>;
+  onAddBookLink: (url: string, department: string) => Promise<LibraryBook | void>;
+  onAddLocalBook: (file: File, department: string) => Promise<LibraryBook | void>;
   onRemoveBook: (book: LibraryBook) => Promise<void>;
   busyBookId?: string | null;
 }
@@ -126,6 +135,7 @@ export function LibraryPanel({
   selectedFileUri,
   isDarkMode,
   onStudyBook,
+  onStudyBookWithAction,
   onDownloadBook,
   onAddBookLink,
   onAddLocalBook,
@@ -137,6 +147,7 @@ export function LibraryPanel({
   const [isSavingBook, setIsSavingBook] = React.useState(false);
   const [saveMessage, setSaveMessage] = React.useState("");
   const [saveError, setSaveError] = React.useState("");
+  const [recentlyUploadedBook, setRecentlyUploadedBook] = React.useState<LibraryBook | null>(null);
   const [previewBook, setPreviewBook] = React.useState<LibraryBook | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -155,9 +166,10 @@ export function LibraryPanel({
     setSaveMessage("");
     setIsSavingBook(true);
     try {
-      await onAddBookLink(bookLinkUrl, newBookDepartment);
+      const saved = await onAddBookLink(bookLinkUrl, newBookDepartment);
       setBookLinkUrl("");
-      setSaveMessage("Book link saved on this device.");
+      setSaveMessage("Book link saved! Choose a smart study suggestion below or open the book.");
+      if (saved) setRecentlyUploadedBook(saved);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Could not save this book link.");
     } finally {
@@ -173,8 +185,9 @@ export function LibraryPanel({
     setSaveMessage("");
     setIsSavingBook(true);
     try {
-      await onAddLocalBook(selectedFile, newBookDepartment);
-      setSaveMessage(`${selectedFile.name} saved on this device.`);
+      const saved = await onAddLocalBook(selectedFile, newBookDepartment);
+      setSaveMessage(`${selectedFile.name} uploaded to your shelf! Pick a recommended AI generation below.`);
+      if (saved) setRecentlyUploadedBook(saved);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Could not save this book file.");
     } finally {
@@ -188,6 +201,7 @@ export function LibraryPanel({
     try {
       await onRemoveBook(book);
       if (previewBook?.id === book.id) setPreviewBook(null);
+      if (recentlyUploadedBook?.id === book.id) setRecentlyUploadedBook(null);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Could not remove this book.");
     }
@@ -212,6 +226,14 @@ export function LibraryPanel({
   const studyBook = (book: LibraryBook) => {
     setPreviewBook(null);
     void onStudyBook(book);
+  };
+  const studyBookWithSuggestion = (book: LibraryBook, action: LibraryBookSuggestionAction) => {
+    setPreviewBook(null);
+    if (onStudyBookWithAction) {
+      void onStudyBookWithAction(book, action);
+    } else {
+      void onStudyBook(book);
+    }
   };
 
   return (
@@ -308,9 +330,118 @@ export function LibraryPanel({
             </div>
           </div>
         </div>
-        <p className={`mt-3 text-[11px] ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Selecting Study Book uploads your Digital Document File or PDF for automatic scanning and 14-function generation.</p>
+        <p className={`mt-3 text-[11px] ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>Selecting Study Book or any Smart Suggestion below uploads your Digital Document File or PDF for automatic scanning and AI generation.</p>
         {saveError && <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:bg-red-950/30 dark:text-red-300">{saveError}</motion.p>}
         {saveMessage && <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} role="status" className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">{saveMessage}</motion.p>}
+
+        {recentlyUploadedBook && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`mt-4 rounded-2xl border p-4 sm:p-5 ${
+              isDarkMode
+                ? "border-indigo-500/40 bg-gradient-to-br from-[#232531] via-[#22221F] to-[#1E262B]"
+                : "border-indigo-200 bg-gradient-to-br from-indigo-50/90 via-white to-sky-50/70 shadow-sm"
+            }`}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-600 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white">
+                  <Sparkles size={11} /> Uploaded Book Smart Suggestions
+                </span>
+                <h4 className={`mt-1.5 font-serif text-base font-bold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
+                  What would you like to generate from &ldquo;{recentlyUploadedBook.title}&rdquo;?
+                </h4>
+                <p className={`mt-0.5 text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-600"}`}>
+                  Click any recommended AI tool below to immediately load this uploaded book and generate study materials:
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRecentlyUploadedBook(null)}
+                className={`rounded-lg p-1.5 text-xs ${isDarkMode ? "text-[#A1A194] hover:bg-[#383832]" : "text-slate-400 hover:bg-slate-100"}`}
+                aria-label="Dismiss book suggestions"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="mt-3.5 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                {
+                  id: "questions" as const,
+                  title: "Question Generation",
+                  desc: "5-Mark & 10-Mark Important Questions + Diagrams",
+                  badge: "Top Pick",
+                  color: "from-emerald-600 to-teal-600",
+                },
+                {
+                  id: "question-bank" as const,
+                  title: "Question Bank Generation",
+                  desc: "Complete Bank: 50+ MCQs, Short & Long Solutions",
+                  badge: "Full Bank",
+                  color: "from-violet-600 to-indigo-600",
+                },
+                {
+                  id: "flashcards" as const,
+                  title: "Flashcard Generation",
+                  desc: "Interactive 3D Pastel Cards for Active Recall",
+                  badge: "Active Recall",
+                  color: "from-amber-500 to-orange-600",
+                },
+                {
+                  id: "exam-paper" as const,
+                  title: "University Exam Paper",
+                  desc: "CO/BT Mapped Exam Question Paper & Marking Scheme",
+                  badge: "Exam Prep",
+                  color: "from-blue-600 to-indigo-700",
+                },
+                {
+                  id: "notes" as const,
+                  title: "Handwritten Chapter Notes",
+                  desc: "50+ A4 Pages Chapter & Unit Wise Study Notes",
+                  badge: "Full A4",
+                  color: "from-sky-600 to-blue-600",
+                },
+                {
+                  id: "ppt" as const,
+                  title: "PPT Presentation Deck",
+                  desc: "Downloadable Slide Deck (.PPTX) from Book Topics",
+                  badge: "Slides",
+                  color: "from-pink-600 to-rose-600",
+                },
+              ].map((sug) => (
+                <button
+                  key={sug.id}
+                  type="button"
+                  disabled={busyBookId === recentlyUploadedBook.id}
+                  onClick={() => studyBookWithSuggestion(recentlyUploadedBook, sug.id)}
+                  className={`group flex items-start justify-between gap-2.5 rounded-xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-md cursor-pointer disabled:opacity-50 ${
+                    isDarkMode
+                      ? "border-[#45453B] bg-[#1E2028] hover:border-indigo-400"
+                      : "border-slate-200/90 bg-white hover:border-indigo-300"
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`inline-block h-2 w-2 rounded-full bg-gradient-to-r ${sug.color}`} />
+                      <span className={`text-xs font-extrabold ${isDarkMode ? "text-[#F5F5F0]" : "text-slate-900"}`}>
+                        {sug.title}
+                      </span>
+                      <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[9px] font-bold text-indigo-600 dark:text-indigo-300">
+                        {sug.badge}
+                      </span>
+                    </div>
+                    <p className={`mt-1 text-[11px] leading-snug ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>
+                      {sug.desc}
+                    </p>
+                  </div>
+                  <Sparkles size={14} className="shrink-0 mt-0.5 text-indigo-500 group-hover:scale-110 transition-transform" />
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         <div className={`my-6 h-px ${isDarkMode ? "bg-[#383832]" : "bg-slate-100"}`} />
 
@@ -396,7 +527,37 @@ export function LibraryPanel({
                       <h4 className={`mt-3 line-clamp-2 min-h-10 text-sm font-bold leading-snug ${isDarkMode ? "text-[#E0E0D5]" : "text-slate-800"}`}>{book.title}</h4>
                       <p className={`mt-1 truncate text-xs ${isDarkMode ? "text-[#A1A194]" : "text-slate-500"}`}>By {book.author}</p>
                       <p className={`mt-3 line-clamp-3 min-h-[3.4rem] text-xs leading-relaxed ${isDarkMode ? "text-[#C2C2B0]" : "text-slate-600"}`}>{book.desc || "A book waiting to be explored."}</p>
-                      <div className="mt-auto flex items-center gap-2 pt-4">
+
+                      {/* Smart Suggestions for this Book */}
+                      <div className={`mt-3 rounded-xl border p-2 ${isDarkMode ? "border-[#383832] bg-[#22221F]" : "border-slate-100 bg-slate-50/80"}`}>
+                        <p className={`mb-1.5 flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider ${isDarkMode ? "text-indigo-300" : "text-indigo-700"}`}>
+                          <Sparkles size={10} /> Book AI Suggestions:
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {[
+                            { id: "questions" as const, label: "❓ Question Gen" },
+                            { id: "question-bank" as const, label: "📚 Question Bank" },
+                            { id: "flashcards" as const, label: "🃏 Flashcards" },
+                            { id: "notes" as const, label: "✍️ Notes" },
+                          ].map((pill) => (
+                            <button
+                              key={pill.id}
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => studyBookWithSuggestion(book, pill.id)}
+                              className={`rounded-lg border px-2 py-1 text-[10px] font-bold transition-all cursor-pointer disabled:opacity-50 ${
+                                isDarkMode
+                                  ? "border-[#45453B] bg-[#292925] text-[#E0E0D5] hover:border-indigo-400 hover:text-indigo-300"
+                                  : "border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800"
+                              }`}
+                            >
+                              {pill.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="mt-auto flex items-center gap-2 pt-3">
                         <button type="button" onClick={() => studyBook(book)} disabled={isBusy} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-bold transition-all disabled:cursor-wait disabled:opacity-60 ${isSelected ? "bg-sky-700 text-white shadow-sm" : isDarkMode ? "border border-sky-500/80 text-sky-300 hover:bg-sky-950/50" : "border border-sky-700 text-sky-700 hover:bg-sky-50"}`}>
                           {isBusy ? <span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" />Preparing...</span> : isSelected ? "Selected for Study" : "Study Book"}
                         </button>
@@ -447,8 +608,30 @@ export function LibraryPanel({
                   <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-300"><BookOpen size={15} /> Book preview</div>
                   <p className={`mt-3 text-sm leading-7 ${isDarkMode ? "text-[#C2C2B0]" : "text-slate-600"}`}>{previewBook.desc || "This title is ready to explore. Open the source link or use your study tools to get started."}</p>
                   <div className={`mt-5 rounded-2xl border p-4 ${isDarkMode ? "border-[#45453B] bg-[#292925]" : "border-slate-200 bg-slate-50/80"}`}>
-                    <p className={`text-[10px] font-bold uppercase tracking-[0.16em] ${isDarkMode ? "text-[#A1A194]" : "text-slate-400"}`}>In your library</p>
-                    <p className={`mt-1 text-xs leading-relaxed ${isDarkMode ? "text-[#C2C2B0]" : "text-slate-600"}`}>{previewBook.storageType === "file" ? "PDF stored on this device" : previewBook.sourceUrl ? "Book link saved to your collection" : "Available in the Notivexa catalog"}</p>
+                    <p className={`text-[10px] font-bold uppercase tracking-[0.16em] ${isDarkMode ? "text-indigo-300" : "text-indigo-700"}`}>✨ Smart AI Suggestions for This Book</p>
+                    <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {[
+                        { id: "questions" as const, label: "❓ Question Gen" },
+                        { id: "question-bank" as const, label: "📚 Question Bank" },
+                        { id: "flashcards" as const, label: "🃏 Flashcards" },
+                        { id: "exam-paper" as const, label: "📝 Exam Paper" },
+                        { id: "notes" as const, label: "✍️ Chapter Notes" },
+                        { id: "ppt" as const, label: "📊 PPT Deck" },
+                      ].map((sug) => (
+                        <button
+                          key={sug.id}
+                          type="button"
+                          onClick={() => studyBookWithSuggestion(previewBook, sug.id)}
+                          className={`rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all cursor-pointer ${
+                            isDarkMode
+                              ? "border-[#55554B] bg-[#22221F] text-[#E0E0D5] hover:border-indigo-400"
+                              : "border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
+                          }`}
+                        >
+                          {sug.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div className="mt-auto flex flex-wrap gap-2 pt-6">
                     <button type="button" onClick={() => studyBook(previewBook)} disabled={busyBookId === previewBook.id} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-700 px-5 py-3 text-xs font-bold text-white shadow-sm transition-all hover:bg-sky-800 disabled:opacity-60">

@@ -422,6 +422,10 @@ async function getContentParts(fileUri: string, mimeType: string, prompt: string
     ];
   }
 
+  if (fileUri && activeRequestContext.fallbackText && activeRequestContext.fallbackText.trim().length > 20 && !pdfTextCache.get(fileUri)) {
+    pdfTextCache.set(fileUri, activeRequestContext.fallbackText);
+  }
+
   // Always use fileData natively so that Gemini scans the document page by page
   // including all image-based scanned pages, diagrams, and text.
   return [
@@ -743,7 +747,18 @@ function convertGeminiContentsToMessages(contents: any[]): Array<{ role: string;
   for (const item of contents) {
     const role = item.role === "model" ? "assistant" : (item.role || "user");
     const parts = item.parts || [];
-    const text = parts.map((p: any) => p.text || "").filter(Boolean).join("\n\n");
+    const textChunks: string[] = [];
+    for (const p of parts) {
+      if (p?.text) {
+        textChunks.push(p.text);
+      } else if (p?.fileData?.fileUri) {
+        const cachedDocText = pdfTextCache.get(p.fileData.fileUri) || activeRequestContext.fallbackText || "";
+        if (cachedDocText) {
+          textChunks.push(`Here is the extracted document text:\n\n${cachedDocText.slice(0, 60000)}`);
+        }
+      }
+    }
+    const text = textChunks.filter(Boolean).join("\n\n");
     if (text) {
       messages.push({ role, content: text });
     }
@@ -912,18 +927,16 @@ async function generateContentWithFallback(ai: any, params: any, excludedModels 
   }
 
   const modelsToTry = [
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
-    "gemini-3.8-flash"
+    "gemini-3.8-flash",
+    "gemini-flash-latest"
   ];
-  const requested = params.model || "gemini-flash-lite-latest";
-  // Prioritize gemini-flash-lite-latest and gemini-3.5-flash-lite first to avoid 503 high-demand spikes
-  const orderedCandidates =
-    requested === "gemini-3.1-flash-lite" || requested === "gemini-3.8-flash"
-      ? ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", requested, ...modelsToTry]
-      : [requested, ...modelsToTry];
+  const rawRequested = params.model || "gemini-3.1-flash-lite";
+  const requested =
+    rawRequested === "gemini-flash-lite-latest" || rawRequested === "gemini-3.5-flash-lite"
+      ? "gemini-3.1-flash-lite"
+      : rawRequested;
+  const orderedCandidates = [requested, ...modelsToTry];
   const uniqueModels = Array.from(new Set(orderedCandidates));
 
   // Filter out any models currently cooling down or excluded
@@ -950,21 +963,30 @@ async function generateContentWithFallback(ai: any, params: any, excludedModels 
     throw new Error("All AI models are currently experiencing high demand. Please retry in a moment.");
   }
 
+  let workingContents = params.contents;
+
   for (let i = 0; i < availableModels.length; i++) {
     const model = availableModels[i];
     const hasMoreModels = i < availableModels.length - 1;
     try {
       console.log(`Attempting fast Gemini generation with model: ${model}`);
-      const supportsThinkingBudget = model === "gemini-3.1-flash-lite" || model === "gemini-3.8-flash";
+      const isGemini31Lite = model === "gemini-3.1-flash-lite";
+      const isGemini38Flash = model === "gemini-3.8-flash";
       const existingConfig = { ...(params.config || {}) };
-      if (!supportsThinkingBudget && existingConfig.thinkingConfig) {
+      if (!isGemini31Lite && existingConfig.thinkingConfig) {
         delete existingConfig.thinkingConfig;
+      }
+      if (isGemini38Flash) {
+        delete existingConfig.temperature;
+        delete existingConfig.topP;
+        delete existingConfig.topK;
+        delete existingConfig.candidateCount;
       }
       const maxOutputTokens = existingConfig.maxOutputTokens
         ? Math.min(existingConfig.maxOutputTokens, 8192)
         : undefined;
       const baseConfig = maxOutputTokens ? { ...existingConfig, maxOutputTokens } : existingConfig;
-      const fastConfig = supportsThinkingBudget && !baseConfig.thinkingConfig
+      const fastConfig = isGemini31Lite && !baseConfig.thinkingConfig
         ? {
             ...baseConfig,
             thinkingConfig: {
@@ -972,7 +994,7 @@ async function generateContentWithFallback(ai: any, params: any, excludedModels 
             }
           }
         : baseConfig;
-      const apiParams = { ...params, model, config: fastConfig };
+      const apiParams = { ...params, contents: workingContents, model, config: fastConfig };
       const response = await withRetry<any>(() => ai.models.generateContent(apiParams), 1, 500, true);
       if (!requireText || response.text?.trim()) return response;
 
@@ -982,6 +1004,37 @@ async function generateContentWithFallback(ai: any, params: any, excludedModels 
     } catch (error: any) {
       lastError = error;
       const errorMsg = (error.message || "").toLowerCase();
+
+      // Check if failure is due to an expired/inaccessible fileData URI while fallback text is available
+      const isFileDataError =
+        error.status === 403 ||
+        errorMsg.includes("permission_denied") ||
+        errorMsg.includes("file") && (errorMsg.includes("not found") || errorMsg.includes("expired") || errorMsg.includes("invalid"));
+      if (isFileDataError && Array.isArray(workingContents)) {
+        let replacedFileData = false;
+        const fallbackDocText = activeRequestContext.fallbackText || "";
+        const updatedContents = workingContents.map((item: any) => {
+          if (!Array.isArray(item?.parts)) return item;
+          const newParts = item.parts.map((part: any) => {
+            if (part?.fileData?.fileUri) {
+              const textFromCache = pdfTextCache.get(part.fileData.fileUri) || fallbackDocText;
+              if (textFromCache && textFromCache.trim().length > 10) {
+                replacedFileData = true;
+                return { text: `Here is the extracted document text:\n\n${textFromCache.slice(0, 300000)}` };
+              }
+            }
+            return part;
+          });
+          return { ...item, parts: newParts };
+        });
+        if (replacedFileData) {
+          console.log("[Multi-AI Engine] Replaced expired Gemini fileUri with cached document text and retrying immediately...");
+          workingContents = updatedContents;
+          i--; // Retry same model with inline text
+          continue;
+        }
+      }
+
       const isQuotaOrTemporaryError = 
         checkIsOverload(error, errorMsg) ||
         checkIsTimeout(error, errorMsg) ||
@@ -1115,7 +1168,7 @@ app.post("/api/chat", async (req, res) => {
     try {
       const ai = getGenAI();
       const response = await generateContentWithFallback(ai, {
-        model: "gemini-flash-lite-latest",
+        model: "gemini-3.1-flash-lite",
         contents: contents
       }, new Set<string>(), true);
       if (response?.text) {
@@ -5476,6 +5529,115 @@ app.post("/api/tts", async (req, res) => {
   } catch (error: any) {
     console.error("TTS endpoint error:", error);
     return res.status(500).json({ error: error.message || "TTS service error" });
+  }
+});
+
+const USER_STORAGE_DIR = "/tmp/notivexa-user-storage";
+try {
+  if (!fs.existsSync(USER_STORAGE_DIR)) {
+    fs.mkdirSync(USER_STORAGE_DIR, { recursive: true });
+  }
+} catch {
+  // Ignore directory creation warnings
+}
+
+function getSafeUserStorageFilePath(userKey: string): string {
+  const safeKey = String(userKey || "local_primary_user")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 120);
+  return path.join(USER_STORAGE_DIR, `${safeKey}.json`);
+}
+
+app.post("/api/user-storage/sync", (req, res) => {
+  try {
+    const { userKey, kind, payload } = req.body || {};
+    if (!payload) return res.json({ status: "ignored" });
+
+    const filePath = getSafeUserStorageFilePath(userKey || "local_primary_user");
+    let vaultData: { studyItems: any[]; uploadedDocs: any[]; updatedAt: number } = {
+      studyItems: [],
+      uploadedDocs: [],
+      updatedAt: Date.now(),
+    };
+
+    if (fs.existsSync(filePath)) {
+      try {
+        vaultData = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      } catch {
+        // Reset corrupted file
+      }
+    }
+
+    if (kind === "study_item" && payload.id) {
+      vaultData.studyItems = [
+        payload,
+        ...(vaultData.studyItems || []).filter((item: any) => item?.id !== payload.id),
+      ].slice(0, 100);
+    } else if (kind === "uploaded_doc" && payload.id) {
+      vaultData.uploadedDocs = [
+        payload,
+        ...(vaultData.uploadedDocs || []).filter((doc: any) => doc?.id !== payload.id),
+      ].slice(0, 50);
+    } else if (kind === "workspace_snapshot") {
+      (vaultData as any).workspaceSnapshot = payload;
+    }
+
+    vaultData.updatedAt = Date.now();
+    fs.writeFileSync(filePath, JSON.stringify(vaultData));
+    return res.json({ status: "ok", updatedAt: vaultData.updatedAt });
+  } catch (err: any) {
+    return res.json({ status: "warning", message: err?.message });
+  }
+});
+
+app.post("/api/user-storage/delete", (req, res) => {
+  try {
+    const { userKey, kind, id } = req.body || {};
+    if (!id) return res.json({ status: "ignored" });
+
+    const filePath = getSafeUserStorageFilePath(userKey || "local_primary_user");
+    if (!fs.existsSync(filePath)) {
+      return res.json({ status: "ok" });
+    }
+    const vaultData = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (kind === "study_item" || !kind) {
+      vaultData.studyItems = (vaultData.studyItems || []).filter((item: any) => item?.id !== id);
+    }
+    if (kind === "uploaded_doc" || !kind) {
+      vaultData.uploadedDocs = (vaultData.uploadedDocs || []).filter((doc: any) => doc?.id !== id);
+    }
+    vaultData.updatedAt = Date.now();
+    fs.writeFileSync(filePath, JSON.stringify(vaultData));
+    return res.json({ status: "ok", updatedAt: vaultData.updatedAt });
+  } catch {
+    return res.json({ status: "ok" });
+  }
+});
+
+app.get("/api/user-storage/get", (req, res) => {
+  try {
+    const userKey = String(req.query.userKey || "local_primary_user");
+    const filePath = getSafeUserStorageFilePath(userKey);
+    if (!fs.existsSync(filePath)) {
+      return res.json({ studyItems: [], uploadedDocs: [], updatedAt: null });
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    return res.json(JSON.parse(raw));
+  } catch {
+    return res.json({ studyItems: [], uploadedDocs: [], updatedAt: null });
+  }
+});
+
+app.post("/api/user-storage/clear", (req, res) => {
+  try {
+    const { userKey } = req.body || {};
+    const filePath = getSafeUserStorageFilePath(userKey || "local_primary_user");
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    return res.json({ status: "ok" });
+  } catch {
+    return res.json({ status: "ok" });
   }
 });
 
