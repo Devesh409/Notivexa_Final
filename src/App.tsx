@@ -29,7 +29,7 @@ import {
 } from "./services/userStorage";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { motion } from "motion/react";
-import { BookOpen, GraduationCap, Upload, FileText, FileDown, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail, HardDrive, Lightbulb, ScanText, Settings2, Database } from "lucide-react";
+import { BookOpen, GraduationCap, Upload, FileText, FileDown, Presentation, FileQuestion, Download, Loader2, Shuffle, LogOut, AlertCircle, X, Camera, Clock, Trash2, RefreshCw, ExternalLink, Calendar, FileVideo, Sun, Moon, CheckCircle2, Workflow, ArrowRight, Sparkles, ChevronDown, Maximize2 , Play, Pause, Square, Volume2 , Check, Target, Activity, ChevronLeft, ChevronRight, Menu, Bell, Settings, Info, House, Mail, HardDrive, Lightbulb, ScanText, Settings2, Database, Images, Plus, PenTool } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -859,6 +859,9 @@ export default function App() {
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [galleryPhotos, setGalleryPhotos] = useState<Array<{ id: string; file: File; previewUrl: string; name: string }>>([]);
+  const [isConvertingGallery, setIsConvertingGallery] = useState<boolean>(false);
+  const [galleryConversionStyle, setGalleryConversionStyle] = useState<"verbatim" | "notes" | "table">("verbatim");
   // EasyOCR Framework & Digital Document Scanner State
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -1405,6 +1408,183 @@ export default function App() {
     stopCamera();
   };
 
+  const convertGalleryPhotosToHandwriting = async (
+    photosOverride?: Array<{ id: string; file: File; previewUrl: string; name: string }>,
+    styleOverride?: "verbatim" | "notes" | "table"
+  ) => {
+    const activePhotos = photosOverride || galleryPhotos;
+    if (!activePhotos || activePhotos.length === 0) {
+      setError("Please select one or more photos from your gallery first.");
+      return;
+    }
+
+    const activeStyle = styleOverride || galleryConversionStyle;
+    setLoading(true);
+    setIsConvertingGallery(true);
+    setGeneratingType(activeStyle === "table" ? "handwritten-table-form" : activeStyle === "notes" ? "notes" : "verbatim-handwriting");
+    setError(null);
+    stopCamera();
+    setIsScannerOpen(false);
+    setCapturedPhoto(null);
+
+    if (mode !== "student") {
+      setMode("student");
+    }
+
+    try {
+      const formData = new FormData();
+      activePhotos.forEach((item) => {
+        formData.append("photos", item.file, item.name);
+      });
+      formData.append("conversionStyle", activeStyle);
+
+      lastActionRef.current = () => convertGalleryPhotosToHandwriting(activePhotos, activeStyle);
+
+      const res = await fetch("/api/convert-gallery-handwriting", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || `Failed to convert gallery photos (${res.status})`);
+      }
+
+      const primaryFile = activePhotos[0].file;
+      const galleryDocTitle =
+        data.title ||
+        (activePhotos.length === 1
+          ? `${primaryFile.name.replace(/\.[^/.]+$/, "")} — Student Realistic Handwriting`
+          : `Gallery Scan (${activePhotos.length} Photos) — Student Realistic Handwriting`);
+
+      setFile(
+        activePhotos.length === 1
+          ? primaryFile
+          : new File([primaryFile], `Gallery_${activePhotos.length}_Photos.jpg`, { type: primaryFile.type || "image/jpeg" })
+      );
+      setFileData({ fileUri: data.fileUri, mimeType: data.mimeType || "text/markdown" });
+
+      const rawText = data.extractedText || data.result || "";
+      if (rawText && data.fileUri) {
+        extractedTextCacheRef.current.set(data.fileUri, rawText);
+        setScannedDigitalText(rawText);
+      }
+
+      if (data.digitalScan) {
+        setDigitalScanReport(data.digitalScan);
+        if (Array.isArray(data.digitalScan.units) && data.digitalScan.units.length > 0) {
+          setDetectedUnits(data.digitalScan.units);
+          if (data.digitalScan.units[0]?.unit) {
+            setSelectedUnit(data.digitalScan.units[0].unit);
+          }
+        }
+      }
+
+      const formattedHandwriting = normalizeGeneratedContent(data.result || rawText);
+      const outputResultType = activeStyle === "notes" ? "notes" : "verbatim-handwriting";
+      const cacheKey = activeStyle === "table" ? "handwritten-table-form" : activeStyle === "notes" ? "notes" : "verbatim-handwriting";
+
+      setIsVerbatimTableMode(activeStyle === "table");
+      setResultText(formattedHandwriting);
+      setResultType(outputResultType);
+      setActiveMultiFunctionTitle(galleryDocTitle);
+      setFlashcards([]);
+      setShowDigitalScannerHub(false);
+      setGeneratedFunctionsCache((prev) => ({
+        ...prev,
+        [cacheKey]: {
+          label: galleryDocTitle,
+          resultText: formattedHandwriting,
+          resultType: outputResultType,
+        },
+      }));
+
+      const totalBytes = activePhotos.reduce((acc, p) => acc + (p.file?.size || 0), 0);
+      void saveUploadedDocumentToVault(userStorageKey, {
+        id: `doc:${data.fileUri}`,
+        fileName: galleryDocTitle,
+        mimeType: "image/jpeg",
+        fileSize: totalBytes || primaryFile.size,
+        fileUri: data.fileUri,
+        uploadSource: `Gallery Multi-Photo Scan (${activePhotos.length} Photos)`,
+        extractedText: rawText,
+        digitalScan: data.digitalScan || null,
+        detectedUnits: data.digitalScan?.units || [],
+        fileBlob: primaryFile,
+      }).then(() => setStorageRefreshTick((t) => t + 1)).catch(() => {});
+
+      void persistStudyOutputToUserVault({
+        title: galleryDocTitle,
+        type: outputResultType,
+        fileUri: data.fileUri,
+        mimeType: "text/markdown",
+        resultText: formattedHandwriting,
+        flashcards: [],
+        focusArea: `Gallery Scan (${activePhotos.length} Photos) -> Student Realistic Handwriting`,
+      }).catch(() => {});
+
+      if (user) {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
+          title: galleryDocTitle,
+          type: outputResultType,
+          fileUri: data.fileUri,
+          mimeType: "text/markdown",
+          resultText: formattedHandwriting,
+          flashcards: [],
+          focusArea: `Gallery Scan (${activePhotos.length} Photos) -> Student Realistic Handwriting`,
+          createdAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      handleFetchError(err);
+    } finally {
+      setLoading(false);
+      setIsConvertingGallery(false);
+      setGeneratingType("");
+    }
+  };
+
+  const handleGalleryPhotosSelect = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    autoConvert = true
+  ) => {
+    const fileList = e.currentTarget.files;
+    if (!fileList || fileList.length === 0) return;
+    const selectedFiles: File[] = Array.from(fileList);
+    e.currentTarget.value = "";
+
+    const newItems = selectedFiles.map((f, idx) => ({
+      id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+      file: f,
+      previewUrl: URL.createObjectURL(f),
+      name: f.name || `Gallery_Photo_${idx + 1}.jpg`,
+    }));
+
+    const combined = [...galleryPhotos, ...newItems].slice(0, 30);
+    setGalleryPhotos(combined);
+    setInputType("scan");
+
+    if (autoConvert) {
+      await convertGalleryPhotosToHandwriting(combined);
+    }
+  };
+
+  const removeGalleryPhoto = (idToRemove: string) => {
+    setGalleryPhotos((prev) => {
+      const target = prev.find((p) => p.id === idToRemove);
+      if (target?.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((p) => p.id !== idToRemove);
+    });
+  };
+
+  const clearGalleryPhotos = () => {
+    galleryPhotos.forEach((p) => {
+      if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+    });
+    setGalleryPhotos([]);
+  };
+
   const confirmScan = async () => {
     if (!capturedPhoto) return;
     setLoading(true);
@@ -1414,34 +1594,15 @@ export default function App() {
       const response = await fetch(capturedPhoto);
       const blob = await response.blob();
       const scannedFile = new File([blob], `scan-${Date.now()}.jpg`, { type: "image/jpeg" });
-      setFile(scannedFile);
-      const data = await uploadDocumentToServer(scannedFile);
-      setFileData({ fileUri: data.fileUri, mimeType: data.mimeType });
-      setResultText("");
-      setResultType("");
-      setFlashcards([]);
-      setGeneratedFunctionsCache({});
-      setShowDigitalScannerHub(true);
-      if (data.digitalScan) {
-        setDigitalScanReport(data.digitalScan);
-        setScannedDigitalText(data.extractedText || data.digitalScan.textPreview || "");
-        if (data.digitalScan.units?.length) {
-          setDetectedUnits(data.digitalScan.units);
-        }
-      }
-      await saveUploadedDocumentToVault(userStorageKey, {
-        id: `doc:${data.fileUri}`,
-        fileName: scannedFile.name,
-        mimeType: data.mimeType || "image/jpeg",
-        fileSize: scannedFile.size,
-        fileUri: data.fileUri,
-        uploadSource: "Optical Camera Scan",
-        extractedText: data.extractedText || data.digitalScan?.textPreview || "",
-        digitalScan: data.digitalScan || null,
-        detectedUnits: data.digitalScan?.units || [],
-        fileBlob: scannedFile,
-      });
-      setStorageRefreshTick((t) => t + 1);
+      const capturedItem = {
+        id: `scan-${Date.now()}`,
+        file: scannedFile,
+        previewUrl: capturedPhoto,
+        name: scannedFile.name,
+      };
+      const updatedPhotos = [...galleryPhotos, capturedItem];
+      setGalleryPhotos(updatedPhotos);
+      await convertGalleryPhotosToHandwriting(updatedPhotos);
     } catch (err) {
       handleFetchError(err);
     } finally {
@@ -1471,6 +1632,12 @@ export default function App() {
     }
 
     try {
+      const fallbackDocText =
+        scannedDigitalText ||
+        (fileData?.fileUri ? extractedTextCacheRef.current.get(fileData.fileUri) || "" : "") ||
+        digitalScanReport?.textPreview ||
+        "";
+
       let data: any;
       if (base64Data) {
         data = await apiFetchJson("/api/ocr", {
@@ -1485,6 +1652,9 @@ export default function App() {
           formData.append("fileUri", fileData.fileUri);
           formData.append("mimeType", fileData.mimeType);
         }
+        if (fallbackDocText && !fileToProcess.type.startsWith("image/")) {
+          formData.append("fallbackText", fallbackDocText.slice(0, 35000));
+        }
         const res = await fetch("/api/ocr", {
           method: "POST",
           body: formData,
@@ -1498,7 +1668,11 @@ export default function App() {
         data = await apiFetchJson("/api/ocr", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileUri: fileData.fileUri, mimeType: fileData.mimeType }),
+          body: JSON.stringify({
+            fileUri: fileData.fileUri,
+            mimeType: fileData.mimeType,
+            fallbackText: fallbackDocText.slice(0, 35000),
+          }),
         });
       }
 
@@ -2479,7 +2653,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
               }
             }
             if (cachedText) {
-              parsed.fallbackText = cachedText.slice(0, 120000);
+              parsed.fallbackText = cachedText.slice(0, 35000);
             }
           }
           currentOptions.body = JSON.stringify(parsed);
@@ -2818,7 +2992,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
         void scanDigitalDocument(data.fileUri, data.mimeType, selectedFile.name, false);
       }
 
-      await saveUploadedDocumentToVault(userStorageKey, {
+      void saveUploadedDocumentToVault(userStorageKey, {
         id: `doc:${data.fileUri}`,
         fileName: selectedFile.name,
         mimeType: data.mimeType || selectedFile.type || "application/octet-stream",
@@ -2829,8 +3003,7 @@ This study companion can be uploaded to the study panel to generate notes, asses
         digitalScan: data.digitalScan || null,
         detectedUnits: data.digitalScan?.units || [],
         fileBlob: selectedFile,
-      });
-      setStorageRefreshTick((t) => t + 1);
+      }).then(() => setStorageRefreshTick((t) => t + 1)).catch(() => {});
 
       // Immediately render the uploaded document same-to-same in the interface so the user can view and fast-download the exact pages right away
       const isTabularUpload = /\.(xlsx|xls|csv|tsv)$/i.test(selectedFile.name);
@@ -2843,20 +3016,16 @@ This study companion can be uploaded to the study panel to generate notes, asses
       );
 
       if (user) {
-        try {
-          await addDoc(collection(db, "users", user.uid, "books"), {
-            title: selectedFile.name,
-            author: "Uploaded File",
-            desc: `Uploaded via ${uploadSource}`,
-            department: "General",
-            fileUri: data.fileUri,
-            mimeType: data.mimeType,
-            link: "",
-            createdAt: serverTimestamp()
-          });
-        } catch (dbErr) {
-          console.warn("Failed to save to history:", dbErr);
-        }
+        void addDoc(collection(db, "users", user.uid, "books"), {
+          title: selectedFile.name,
+          author: "Uploaded File",
+          desc: `Uploaded via ${uploadSource}`,
+          department: "General",
+          fileUri: data.fileUri,
+          mimeType: data.mimeType,
+          link: "",
+          createdAt: serverTimestamp()
+        }).catch((dbErr) => console.warn("Failed to save to history:", dbErr));
       }
     } catch (err: any) {
       handleFetchError(err);
@@ -3065,7 +3234,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         }
       }
 
-      await saveUploadedDocumentToVault(userStorageKey, {
+      void saveUploadedDocumentToVault(userStorageKey, {
         id: `doc:${data.fileUri}`,
         fileName,
         mimeType: data.mimeType || mimeType,
@@ -3076,7 +3245,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         digitalScan: data.digitalScan || null,
         detectedUnits: data.digitalScan?.units || [],
         fileBlob: syntheticFile,
-      });
+      }).catch(() => {});
 
       await convertDocumentSameToSameHandwriting(
         data.fileUri,
@@ -3217,7 +3386,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         ? `${file ? file.name : "Study Notes"} - ${finalUnit !== "all" ? finalUnit : ""} ${finalChapter !== "all" ? finalChapter : ""}`.trim()
         : (file ? file.name : "Study Notes");
 
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: noteTitle,
         type: "notes",
         notesVersion: data.notesVersion ?? 5,
@@ -3226,10 +3395,10 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         resultText: generatedNotes,
         flashcards: [],
         focusArea: focusArea,
-      });
+      }).catch(() => {});
 
       if (user) {
-        await addDoc(collection(db, "users", user.uid, "documents"), {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
           title: noteTitle,
           type: "notes",
           notesVersion: data.notesVersion ?? 5,
@@ -3239,7 +3408,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           flashcards: [],
           focusArea: focusArea,
           createdAt: serverTimestamp()
-        });
+        }).catch(() => {});
       }
 
     } catch (err: any) {
@@ -3286,7 +3455,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
       setResultType("assessment");
             setFlashcards([]);
 
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: file ? file.name : "Assessment Paper",
         type: "assessment",
         fileUri: fileData.fileUri,
@@ -3294,20 +3463,19 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         resultText: generatedAssessment,
         flashcards: [],
         focusArea: focusArea,
-      });
+      }).catch(() => {});
 
       if (user) {
-        await addDoc(collection(db, "users", user.uid, "documents"), {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
           title: file ? file.name : "Assessment Paper",
           type: "assessment",
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
           resultText: generatedAssessment,
-
           flashcards: [],
           focusArea: focusArea,
           createdAt: serverTimestamp()
-        });
+        }).catch(() => {});
       }
 
     }
@@ -3388,7 +3556,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: file ? file.name : "Question Bank",
         type: "question-bank",
         questionBankType: activeQuestionType,
@@ -3399,10 +3567,10 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         resultText: generatedQuestionBank,
         flashcards: [],
         focusArea: focusArea,
-      });
+      }).catch(() => {});
 
       if (user) {
-        await addDoc(collection(db, "users", user.uid, "documents"), {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
           title: file ? file.name : "Question Bank",
           type: "question-bank",
           questionBankType: activeQuestionType,
@@ -3414,7 +3582,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           flashcards: [],
           focusArea: focusArea,
           createdAt: serverTimestamp(),
-        });
+        }).catch(() => {});
       }
     } catch (err: any) {
       handleFetchError(err);
@@ -3497,7 +3665,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: plan.title || (file ? file.name : "Study Lesson Plan"),
         type: "lesson-plan",
         fileUri: fileData.fileUri,
@@ -3506,10 +3674,10 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         flashcards: [],
         lessonPlan: normalizedPlan,
         focusArea: activeFocus,
-      });
+      }).catch(() => {});
 
       if (user) {
-        await addDoc(collection(db, "users", user.uid, "documents"), {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
           title: plan.title || (file ? file.name : "Study Lesson Plan"),
           type: "lesson-plan",
           fileUri: fileData.fileUri,
@@ -3519,7 +3687,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           lessonPlan: normalizedPlan,
           focusArea: activeFocus,
           createdAt: serverTimestamp()
-        });
+        }).catch(() => {});
       }
 
     } catch (err: any) {
@@ -3572,7 +3740,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         flashcards: { label: "Pastel Flashcards", flashcards: generatedFlashcards },
       }));
       
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: file ? file.name : "Flashcard Set",
         type: "flashcards",
         fileUri: fileData.fileUri,
@@ -3580,20 +3748,19 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         resultText: "",
         flashcards: generatedFlashcards,
         focusArea: focusArea,
-      });
+      }).catch(() => {});
 
       if (user) {
-        await addDoc(collection(db, "users", user.uid, "documents"), {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
           title: file ? file.name : "Flashcard Set",
           type: "flashcards",
           fileUri: fileData.fileUri,
           mimeType: fileData.mimeType,
           resultText: "",
-
           flashcards: generatedFlashcards,
           focusArea: focusArea,
           createdAt: serverTimestamp()
-        });
+        }).catch(() => {});
       }
 
     }
@@ -3664,7 +3831,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: `${file ? file.name : "Document"} - ${titleLabel}`,
         type: functionType,
         fileUri: fileData.fileUri,
@@ -3672,10 +3839,10 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         resultText: generatedContent,
         flashcards: [],
         focusArea: activeFocus,
-      });
+      }).catch(() => {});
 
       if (user) {
-        await addDoc(collection(db, "users", user.uid, "documents"), {
+        void addDoc(collection(db, "users", user.uid, "documents"), {
           title: `${file ? file.name : "Document"} - ${titleLabel}`,
           type: functionType,
           fileUri: fileData.fileUri,
@@ -3684,7 +3851,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           flashcards: [],
           focusArea: activeFocus,
           createdAt: serverTimestamp(),
-        });
+        }).catch(() => {});
       }
     } catch (err: any) {
       handleFetchError(err);
@@ -3794,7 +3961,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         },
       }));
 
-      await persistStudyOutputToUserVault({
+      void persistStudyOutputToUserVault({
         title: titleLabel,
         type: "verbatim-handwriting",
         fileUri: activeUri || data.fileUri || "",
@@ -3802,23 +3969,19 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         resultText: verbatimPages,
         flashcards: [],
         focusArea: tableMode || tableData ? "Handwritten Table Form (1:1)" : "Exact Same-to-Same Verbatim Document",
-      });
+      }).catch(() => {});
 
       if (user) {
-        try {
-          await addDoc(collection(db, "users", user.uid, "documents"), {
-            title: titleLabel,
-            type: "verbatim-handwriting",
-            fileUri: activeUri || data.fileUri || "",
-            mimeType: activeMime,
-            resultText: verbatimPages,
-            flashcards: [],
-            focusArea: tableMode || tableData ? "Handwritten Table Form (1:1)" : "Exact Same-to-Same Verbatim Document",
-            createdAt: serverTimestamp(),
-          });
-        } catch (dbErr) {
-          console.warn("Could not save verbatim handwriting document to history:", dbErr);
-        }
+        void addDoc(collection(db, "users", user.uid, "documents"), {
+          title: titleLabel,
+          type: "verbatim-handwriting",
+          fileUri: activeUri || data.fileUri || "",
+          mimeType: activeMime,
+          resultText: verbatimPages,
+          flashcards: [],
+          focusArea: tableMode || tableData ? "Handwritten Table Form (1:1)" : "Exact Same-to-Same Verbatim Document",
+          createdAt: serverTimestamp(),
+        }).catch((dbErr) => console.warn("Could not save verbatim handwriting document to history:", dbErr));
       }
     } catch (err: any) {
       handleFetchError(err);
@@ -3863,7 +4026,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           setDetectedUnits(uploaded.digitalScan.units);
         }
       }
-      await saveUploadedDocumentToVault(userStorageKey, {
+      void saveUploadedDocumentToVault(userStorageKey, {
         id: `doc:${uploaded.fileUri}`,
         fileName: selectedFile.name,
         mimeType: uploaded.mimeType || selectedFile.type || "application/octet-stream",
@@ -3874,7 +4037,7 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
         digitalScan: uploaded.digitalScan || null,
         detectedUnits: uploaded.digitalScan?.units || [],
         fileBlob: selectedFile,
-      });
+      }).catch(() => {});
       await convertDocumentSameToSameHandwriting(
         uploaded.fileUri,
         uploaded.mimeType,
@@ -3972,21 +4135,62 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
     const activeFocus = activeScanFocusTopic || focusArea;
 
     try {
-      // 1. Executive Summary
-      setBatchProgressLabel("Step 1/4: Generating Executive Summary...");
-      const summaryData = await apiFetchJson("/api/generate-doc-function", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileUri: fileData.fileUri,
-          mimeType: fileData.mimeType,
-          functionType: "executive-summary",
-          focusArea: activeFocus,
-          mode,
-          model: selectedAiModel,
+      setBatchProgressLabel("Generating Summary, 5M Short Q&A, Cheat Sheet & Flashcards in parallel...");
+      const [summaryData, shortQData, cheatData, cardsData] = await Promise.all([
+        apiFetchJson("/api/generate-doc-function", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileUri: fileData.fileUri,
+            mimeType: fileData.mimeType,
+            functionType: "executive-summary",
+            focusArea: activeFocus,
+            mode,
+            model: selectedAiModel,
+          }),
         }),
-      });
+        apiFetchJson("/api/generate-question-bank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileUri: fileData.fileUri,
+            mimeType: fileData.mimeType,
+            questionType: "short",
+            bloomLevel: questionBankBloomLevel,
+            mode,
+            model: selectedAiModel,
+          }),
+        }),
+        apiFetchJson("/api/generate-doc-function", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileUri: fileData.fileUri,
+            mimeType: fileData.mimeType,
+            functionType: "cheat-sheet",
+            focusArea: activeFocus,
+            mode,
+            model: selectedAiModel,
+          }),
+        }),
+        apiFetchJson("/api/generate-flashcards", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileUri: fileData.fileUri,
+            mimeType: fileData.mimeType,
+            mode,
+            model: selectedAiModel,
+          }),
+        }),
+      ]);
+
       const summaryText = normalizeGeneratedContent(summaryData.result || "");
+      const shortQText = normalizeGeneratedContent(shortQData.result || "");
+      const cheatText = normalizeGeneratedContent(cheatData.result || "");
+      const cardsList = normalizeGeneratedFlashcards(cardsData.flashcards || []);
+
+      setGeneratedFlashcards(cardsList);
       setGeneratedFunctionsCache((prev) => ({
         ...prev,
         "executive-summary": {
@@ -3994,121 +4198,67 @@ Supervised learning learns a mapping function $f_\\theta: X \\rightarrow Y$ from
           resultText: summaryText,
           resultType: "executive-summary",
         },
-      }));
-
-      // 2. 5-Mark Short Questions (2 A4 Pages + Diagrams)
-      setBatchProgressLabel("Step 2/4: Generating 5M Short Q&A (2 A4 Pages)...");
-      const shortQData = await apiFetchJson("/api/generate-question-bank", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileUri: fileData.fileUri,
-          mimeType: fileData.mimeType,
-          questionType: "short",
-          bloomLevel: questionBankBloomLevel,
-          mode,
-          model: selectedAiModel,
-        }),
-      });
-      const shortQText = normalizeGeneratedContent(shortQData.result || "");
-      setGeneratedFunctionsCache((prev) => ({
-        ...prev,
         "short-questions": {
           label: "5M Short Questions (2 Pages)",
           resultText: shortQText,
           resultType: "question-bank",
         },
-      }));
-
-      // 3. Cheat Sheet
-      setBatchProgressLabel("Step 3/4: Generating Exam Cheat Sheet...");
-      const cheatData = await apiFetchJson("/api/generate-doc-function", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileUri: fileData.fileUri,
-          mimeType: fileData.mimeType,
-          functionType: "cheat-sheet",
-          focusArea: activeFocus,
-          mode,
-          model: selectedAiModel,
-        }),
-      });
-      const cheatText = normalizeGeneratedContent(cheatData.result || "");
-      setGeneratedFunctionsCache((prev) => ({
-        ...prev,
         "cheat-sheet": {
           label: "High-Yield Exam Cheat Sheet",
           resultText: cheatText,
           resultType: "cheat-sheet",
         },
-      }));
-
-      // 4. Solid Pastel Flashcards
-      setBatchProgressLabel("Step 4/4: Generating Solid Pastel Flashcards...");
-      const cardsData = await apiFetchJson("/api/generate-flashcards", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileUri: fileData.fileUri,
-          mimeType: fileData.mimeType,
-          mode,
-          model: selectedAiModel,
-        }),
-      });
-      const cardsList = normalizeGeneratedFlashcards(cardsData.flashcards || []);
-      setGeneratedFlashcards(cardsList);
-      setGeneratedFunctionsCache((prev) => ({
-        ...prev,
         flashcards: {
           label: "Pastel Flashcards",
           flashcards: cardsList,
         },
       }));
 
-      await persistStudyOutputToUserVault({
-        title: `${file ? file.name : "Document"} - Executive Summary & Digest`,
-        type: "executive-summary",
-        fileUri: fileData.fileUri,
-        mimeType: fileData.mimeType,
-        resultText: summaryText,
-        flashcards: [],
-        focusArea: activeFocus,
-      });
-      await persistStudyOutputToUserVault({
-        title: `${file ? file.name : "Document"} - 5M Short Questions`,
-        type: "question-bank",
-        questionBankType: "short",
-        fileUri: fileData.fileUri,
-        mimeType: fileData.mimeType,
-        resultText: shortQText,
-        flashcards: [],
-        focusArea: activeFocus,
-      });
-      await persistStudyOutputToUserVault({
-        title: `${file ? file.name : "Document"} - High-Yield Exam Cheat Sheet`,
-        type: "cheat-sheet",
-        fileUri: fileData.fileUri,
-        mimeType: fileData.mimeType,
-        resultText: cheatText,
-        flashcards: [],
-        focusArea: activeFocus,
-      });
-      await persistStudyOutputToUserVault({
-        title: `${file ? file.name : "Document"} - Pastel Flashcards`,
-        type: "flashcards",
-        fileUri: fileData.fileUri,
-        mimeType: fileData.mimeType,
-        resultText: "",
-        flashcards: cardsList,
-        focusArea: activeFocus,
-      });
-
       // Display the 5-Mark Short Questions first so user can switch across all 4 functions in 1 click
       setGeneratedResultText(shortQText);
       setResultType("question-bank");
       setActiveMultiFunctionTitle("5M Short Questions (2 Pages)");
       setShowDigitalScannerHub(false);
+
+      void Promise.all([
+        persistStudyOutputToUserVault({
+          title: `${file ? file.name : "Document"} - Executive Summary & Digest`,
+          type: "executive-summary",
+          fileUri: fileData.fileUri,
+          mimeType: fileData.mimeType,
+          resultText: summaryText,
+          flashcards: [],
+          focusArea: activeFocus,
+        }),
+        persistStudyOutputToUserVault({
+          title: `${file ? file.name : "Document"} - 5M Short Questions`,
+          type: "question-bank",
+          questionBankType: "short",
+          fileUri: fileData.fileUri,
+          mimeType: fileData.mimeType,
+          resultText: shortQText,
+          flashcards: [],
+          focusArea: activeFocus,
+        }),
+        persistStudyOutputToUserVault({
+          title: `${file ? file.name : "Document"} - High-Yield Exam Cheat Sheet`,
+          type: "cheat-sheet",
+          fileUri: fileData.fileUri,
+          mimeType: fileData.mimeType,
+          resultText: cheatText,
+          flashcards: [],
+          focusArea: activeFocus,
+        }),
+        persistStudyOutputToUserVault({
+          title: `${file ? file.name : "Document"} - Pastel Flashcards`,
+          type: "flashcards",
+          fileUri: fileData.fileUri,
+          mimeType: fileData.mimeType,
+          resultText: "",
+          flashcards: cardsList,
+          focusArea: activeFocus,
+        }),
+      ]).catch(() => {});
     } catch (err: any) {
       handleFetchError(err);
     } finally {
@@ -6017,21 +6167,180 @@ This study companion has been successfully downloaded from your Notivexa AI Port
 
             {inputType === "scan" && (
               <div className="space-y-3">
+                {/* Primary Option: Upload Multiple Photos from Gallery -> Student Realistic Handwriting */}
+                <div className={`p-3 rounded-2xl border-2 border-dashed transition-all ${
+                  isDarkMode
+                    ? "border-indigo-500/50 bg-[#22221F] hover:border-indigo-400"
+                    : "border-indigo-300 bg-gradient-to-b from-indigo-50/70 via-white to-violet-50/50 hover:border-indigo-500"
+                }`}>
+                  <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-extrabold uppercase tracking-wider bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+                      <Images size={10} /> Gallery Multi-Photo Scan
+                    </span>
+                    <span className={`text-[9px] font-bold ${isDarkMode ? "text-indigo-300" : "text-indigo-700"}`}>
+                      1:1 Student Handwriting
+                    </span>
+                  </div>
+                  <p className={`text-[10px] leading-relaxed mb-2.5 ${isDarkMode ? "text-[#A1A194]" : "text-slate-600"}`}>
+                    Select multiple photos of book pages or notes from your gallery to automatically convert them into realistic student handwriting A4 pages.
+                  </p>
+
+                  {/* Conversion Style Selector */}
+                  <div className="grid grid-cols-3 gap-1 mb-2.5">
+                    {[
+                      { id: "verbatim" as const, label: "1:1 Exact" },
+                      { id: "notes" as const, label: "Study Notes" },
+                      { id: "table" as const, label: "Table Grid" },
+                    ].map((st) => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => setGalleryConversionStyle(st.id)}
+                        className={`py-1 px-1.5 rounded-lg text-[9px] font-bold border transition-all cursor-pointer ${
+                          galleryConversionStyle === st.id
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                            : isDarkMode
+                            ? "bg-[#2A2A26] text-[#C2C2B0] border-[#383832] hover:bg-[#383832]"
+                            : "bg-white text-slate-600 border-slate-200 hover:bg-indigo-50"
+                        }`}
+                      >
+                        {st.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <label className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-500/20 cursor-pointer transition-all">
+                    {isConvertingGallery ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Images size={14} />
+                    )}
+                    <span>
+                      {isConvertingGallery
+                        ? "Converting Gallery Photos…"
+                        : "Upload from Gallery (Multiple Photos)"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      disabled={loading || isConvertingGallery}
+                      onChange={(e) => void handleGalleryPhotosSelect(e, true)}
+                    />
+                  </label>
+                </div>
+
+                {/* Selected Gallery Photos Queue & Re-Convert Controls */}
+                {galleryPhotos.length > 0 && (
+                  <div className={`p-3 rounded-2xl border space-y-2.5 ${
+                    isDarkMode ? "bg-[#282824] border-[#383832]" : "bg-white border-indigo-200/80 shadow-2xs"
+                  }`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className={`text-[10px] font-extrabold uppercase tracking-wider ${isDarkMode ? "text-indigo-300" : "text-indigo-700"}`}>
+                          Gallery Queue ({galleryPhotos.length} {galleryPhotos.length === 1 ? "Photo" : "Photos"})
+                        </p>
+                        <p className="text-[9px] text-[#8A8A7A]">
+                          Converted in order into student A4 handwriting
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <label
+                          title="Add more photos from gallery"
+                          className={`px-2 py-1 rounded-lg text-[9px] font-bold border flex items-center gap-1 cursor-pointer transition-colors ${
+                            isDarkMode
+                              ? "bg-[#22221F] border-[#45453B] text-sky-300 hover:bg-[#383832]"
+                              : "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                          }`}
+                        >
+                          <Plus size={10} /> Add
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            disabled={loading || isConvertingGallery}
+                            onChange={(e) => void handleGalleryPhotosSelect(e, false)}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={clearGalleryPhotos}
+                          disabled={loading || isConvertingGallery}
+                          title="Clear all gallery photos"
+                          className={`p-1 rounded-lg border transition-colors cursor-pointer ${
+                            isDarkMode
+                              ? "bg-[#22221F] border-[#45453B] text-rose-300 hover:bg-rose-950/40"
+                              : "bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100"
+                          }`}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Thumbnails Grid */}
+                    <div className="grid grid-cols-3 gap-1.5 max-h-36 overflow-y-auto pr-0.5">
+                      {galleryPhotos.map((item, idx) => (
+                        <div
+                          key={item.id}
+                          className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200 dark:border-[#45453B] bg-black/5"
+                        >
+                          <img
+                            src={item.previewUrl}
+                            alt={item.name}
+                            className="w-full h-full object-cover"
+                          />
+                          <span className="absolute top-1 left-1 px-1.5 py-0.2 rounded bg-black/75 text-white text-[8px] font-extrabold">
+                            #{idx + 1}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeGalleryPhoto(item.id)}
+                            className="absolute top-1 right-1 p-0.5 rounded-full bg-red-600/90 text-white opacity-90 hover:opacity-100 transition-opacity cursor-pointer"
+                            title="Remove photo"
+                          >
+                            <X size={10} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void convertGalleryPhotosToHandwriting(galleryPhotos)}
+                      disabled={loading || isConvertingGallery}
+                      className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-700 hover:to-violet-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {isConvertingGallery ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <PenTool size={13} />
+                      )}
+                      <span>
+                        ✍️ Convert {galleryPhotos.length} {galleryPhotos.length === 1 ? "Photo" : "Photos"} to Student Handwriting
+                      </span>
+                    </button>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={() => {
                     setIsScannerOpen(true);
                     startCamera();
-                  }
-}
-                  className="w-full bg-[#5A5A40] hover:bg-opacity-90 text-white py-3 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-all"
+                  }}
+                  className="w-full bg-[#5A5A40] hover:bg-opacity-90 text-white py-3 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                 >
-                  <Camera size={14} /> Open Live Page Scanner
+                  <Camera size={14} /> Open Live Camera Scanner
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    if (file && (file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|webp)$/i))) {
+                    if (galleryPhotos.length > 0) {
+                      runEasyOCR(galleryPhotos[0].file);
+                    } else if (file && (file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|webp)$/i))) {
                       runEasyOCR(file);
                     } else {
                       setIsScannerOpen(true);
@@ -7154,6 +7463,26 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                           <Camera size={16} />
                           <span>Camera Scan</span>
                         </button>
+
+                        <label
+                          title="Select multiple photos from your gallery and convert them directly into realistic student handwriting A4 pages"
+                          className={`px-4 py-3 rounded-2xl border text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                            isDarkMode
+                              ? "border-violet-500/40 bg-violet-950/30 text-violet-300 hover:bg-violet-950/50"
+                              : "border-violet-200 bg-violet-50/80 text-violet-700 hover:bg-violet-100"
+                          }`}
+                        >
+                          <Images size={16} />
+                          <span>🖼️ Upload Gallery Photos (Handwriting)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            disabled={loading || isConvertingGallery}
+                            onChange={(e) => void handleGalleryPhotosSelect(e, true)}
+                          />
+                        </label>
                       </div>
                     </div>
 
@@ -8040,7 +8369,7 @@ This study companion has been successfully downloaded from your Notivexa AI Port
               }}
             />
           )}
-      {/* Live Page Scanner Modal Overlay */}
+      {/* Live Page Scanner & Multi-Photo Gallery Modal Overlay */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 bg-[#3A3A2F]/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -8049,42 +8378,74 @@ This study companion has been successfully downloaded from your Notivexa AI Port
             className="bg-white rounded-[28px] shadow-2xl border border-[#E0E0D5] w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
           >
             {/* Header */}
-            <div className="p-6 border-b border-[#E0E0D5] flex items-center justify-between bg-[#FAF9F6]">
+            <div className="p-5 sm:p-6 border-b border-[#E0E0D5] flex items-center justify-between gap-3 bg-[#FAF9F6]">
               <div>
-                <h3 className="font-serif text-xl font-bold text-[#3A3A2F]">Live Book & Document Scanner</h3>
-                <p className="text-xs text-[#8A8A7A]">Align your textbook page or handwritten notes to capture a clear summary</p>
+                <h3 className="font-serif text-lg sm:text-xl font-bold text-[#3A3A2F]">
+                  Scan Page & Gallery Multi-Photo to Student Handwriting
+                </h3>
+                <p className="text-xs text-[#8A8A7A]">
+                  Capture textbook pages with camera or upload multiple photos from your gallery to convert into realistic student handwriting
+                </p>
               </div>
-              <button
-                onClick={() => {
-                  stopCamera();
-                  setIsScannerOpen(false);
-                }
-}
-                className="p-2 hover:bg-[#E8E8E0] text-[#8A8A7A] hover:text-[#5A5A40] rounded-full transition-colors"
-              >
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <label className="px-3.5 py-2 rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer transition-all">
+                  <Images size={14} />
+                  <span>Upload from Gallery</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    disabled={loading || isConvertingGallery}
+                    onChange={(e) => void handleGalleryPhotosSelect(e, true)}
+                  />
+                </label>
+                <button
+                  onClick={() => {
+                    stopCamera();
+                    setIsScannerOpen(false);
+                  }}
+                  className="p-2 hover:bg-[#E8E8E0] text-[#8A8A7A] hover:text-[#5A5A40] rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 p-6 bg-[#FAF9F6] flex flex-col items-center justify-center min-h-[300px] relative">
+            <div className="flex-1 p-5 sm:p-6 bg-[#FAF9F6] flex flex-col items-center justify-center min-h-[280px] overflow-y-auto space-y-4 relative">
               {cameraError && (
-                <div className="text-center p-6 bg-red-50 border border-red-200 rounded-2xl max-w-md">
-                  <p className="text-sm font-bold text-red-800">Camera Error</p>
-                  <p className="text-xs text-red-600 mt-2">{cameraError}</p>
-                  <button
-                    onClick={startCamera}
-                    className="mt-4 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-800 text-xs font-bold rounded-full transition-colors"
-                  >
-                    Try Again
-                  </button>
-                </div>)}
+                <div className="text-center p-6 bg-red-50 border border-red-200 rounded-2xl max-w-md space-y-3">
+                  <p className="text-sm font-bold text-red-800">Camera Unavailable — Use Gallery Upload</p>
+                  <p className="text-xs text-red-600">{cameraError}</p>
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                    <button
+                      onClick={startCamera}
+                      className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-800 text-xs font-bold rounded-full transition-colors cursor-pointer"
+                    >
+                      Retry Camera
+                    </button>
+                    <label className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-full transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs">
+                      <Images size={14} />
+                      <span>Select Multiple Photos from Gallery</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => void handleGalleryPhotosSelect(e, true)}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
 
               {isCameraLoading && (
                 <div className="flex flex-col items-center justify-center space-y-3">
                   <Loader2 className="animate-spin text-[#5A5A40]" size={32} />
                   <p className="text-xs text-[#8A8A7A]">Starting camera feed...</p>
-                </div>)}
+                </div>
+              )}
 
               {/* Live Feed Container */}
               {!cameraError && !capturedPhoto && !isCameraLoading && (
@@ -8102,7 +8463,8 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                       Align Textbook Page Here
                     </div>
                   </div>
-                </div>)}
+                </div>
+              )}
 
               {/* Captured Photo Review */}
               {capturedPhoto && (
@@ -8115,31 +8477,106 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                   <div className="absolute top-3 left-3 bg-[#5A5A40]/90 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">
                     Snapshot Review
                   </div>
-                </div>)}
+                </div>
+              )}
+
+              {/* Gallery Photos Strip inside Modal */}
+              {galleryPhotos.length > 0 && (
+                <div className="w-full max-w-lg bg-white p-3.5 rounded-2xl border border-indigo-200 shadow-xs space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                      <Images size={14} className="text-indigo-600" />
+                      Selected Gallery Photos ({galleryPhotos.length})
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <label className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer">
+                        <Plus size={12} /> Add More Photos
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => void handleGalleryPhotosSelect(e, false)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={clearGalleryPhotos}
+                        className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 text-[11px] font-bold cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    {galleryPhotos.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="relative w-16 h-16 rounded-xl overflow-hidden border border-slate-200 shrink-0"
+                      >
+                        <img src={item.previewUrl} alt={item.name} className="w-full h-full object-cover" />
+                        <span className="absolute top-0.5 left-0.5 px-1 rounded bg-black/75 text-white text-[9px] font-bold">
+                          #{idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeGalleryPhoto(item.id)}
+                          className="absolute top-0.5 right-0.5 p-0.5 rounded-full bg-red-600 text-white"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void convertGalleryPhotosToHandwriting(galleryPhotos)}
+                    disabled={loading || isConvertingGallery}
+                    className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50"
+                  >
+                    {isConvertingGallery ? <Loader2 size={14} className="animate-spin" /> : <PenTool size={14} />}
+                    <span>
+                      ✍️ Convert All {galleryPhotos.length} Photos into Student Realistic Handwriting
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Footer Controls */}
-            <div className="p-6 border-t border-[#E0E0D5] flex justify-between items-center bg-white">
+            <div className="p-5 sm:p-6 border-t border-[#E0E0D5] flex flex-wrap justify-between items-center gap-2 bg-white">
               {!capturedPhoto ? (
                 <>
                   <button
                     onClick={() => {
                       stopCamera();
                       setIsScannerOpen(false);
-                    }
-}
+                    }}
                     className="px-5 py-2.5 rounded-full border border-[#D1D1C4] text-[#8A8A7A] hover:text-[#5A5A40] text-xs font-bold transition-colors"
                   >
                     Cancel
                   </button>
-                  <button
-                    onClick={capturePhoto}
-                    disabled={isCameraLoading || !cameraStream}
-                    className="px-6 py-2.5 rounded-full bg-[#5A5A40] text-white hover:bg-opacity-90 disabled:opacity-50 text-xs font-bold transition-all flex items-center gap-2 shadow-sm"
-                  >
-                    <Camera size={14} /> Capture Page
-                  </button>
-                </>) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="px-5 py-2.5 rounded-full border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer">
+                      <Images size={14} /> Upload Multiple from Gallery
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => void handleGalleryPhotosSelect(e, true)}
+                      />
+                    </label>
+                    <button
+                      onClick={capturePhoto}
+                      disabled={isCameraLoading || !cameraStream}
+                      className="px-6 py-2.5 rounded-full bg-[#5A5A40] text-white hover:bg-opacity-90 disabled:opacity-50 text-xs font-bold transition-all flex items-center gap-2 shadow-sm"
+                    >
+                      <Camera size={14} /> Capture Page
+                    </button>
+                  </div>
+                </>
+              ) : (
                 <>
                   <button
                     onClick={startCamera}
@@ -8147,27 +8584,31 @@ This study companion has been successfully downloaded from your Notivexa AI Port
                   >
                     Retake Photo
                   </button>
-                  <button
-                    onClick={() => {
-                      const photoData = capturedPhoto;
-                      stopCamera();
-                      setIsScannerOpen(false);
-                      runEasyOCR(undefined, photoData);
-                    }}
-                    className="px-5 py-2.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm cursor-pointer"
-                  >
-                    <ScanText size={14} /> Run EasyOCR Extractor
-                  </button>
-                  <button
-                    onClick={confirmScan}
-                    className="px-6 py-2.5 rounded-full bg-[#5A5A40] text-white hover:bg-opacity-90 text-xs font-bold transition-all flex items-center gap-2 shadow-sm cursor-pointer"
-                  >
-                    Confirm & Process Scan
-                  </button>
-                </>)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const photoData = capturedPhoto;
+                        stopCamera();
+                        setIsScannerOpen(false);
+                        runEasyOCR(undefined, photoData);
+                      }}
+                      className="px-5 py-2.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm cursor-pointer"
+                    >
+                      <ScanText size={14} /> Run EasyOCR Extractor
+                    </button>
+                    <button
+                      onClick={confirmScan}
+                      className="px-6 py-2.5 rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm cursor-pointer"
+                    >
+                      <PenTool size={14} /> Convert to Student Handwriting
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </motion.div>
-        </div>)}
+        </div>
+      )}
 
       {/* PDF Export Progress Overlay Modal */}
       {isExporting && (
